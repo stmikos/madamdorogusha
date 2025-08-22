@@ -59,7 +59,7 @@ def health():
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-WELCOME_IMAGE_PATH = "assets/welcome.jpg"
+WELCOME_IMAGE_PATH = "assets/welcome.png"
 
 # =================== DB helpers ===================
 def db():
