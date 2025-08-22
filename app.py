@@ -134,21 +134,41 @@ def get_user(tg_id: int):
         return cur.fetchone()
 
 def upsert_user(tg_id: int, **kwargs):
-    row = get_user(tg_id)
-    fields = list(kwargs.keys())
-    values = list(kwargs.values())
+    # не позволяем перезаписывать служебные поля извне
+    reserved = {"tg_id", "created_at", "updated_at"}
+    cleaned = {k: v for k, v in kwargs.items() if k not in reserved}
 
+    row = get_user(tg_id)
     if row is None:
+        # INSERT
+        fields = list(cleaned.keys())
         cols = ["tg_id", "created_at", "updated_at"] + fields
         ph = ["%s"] * len(cols)
-        vals = [tg_id, now_ts(), now_ts()] + values
+        vals = [tg_id, now_ts(), now_ts()] + list(cleaned.values())
         with db() as con, con.cursor() as cur:
-            cur.execute(f"INSERT INTO users({','.join(cols)}) VALUES({','.join(ph)})", tuple(vals))
+            cur.execute(
+                f"INSERT INTO users({','.join(cols)}) VALUES({','.join(ph)})",
+                tuple(vals),
+            )
     else:
-        set_parts = [f"{k}=%s" for k in fields] + ["updated_at=%s"]
-        vals = values + [now_ts(), tg_id]
-        with db() as con, con.cursor() as cur:
-            cur.execute(f"UPDATE users SET {', '.join(set_parts)} WHERE tg_id=%s", tuple(vals))
+        # UPDATE
+        fields = list(cleaned.keys())
+        if fields:
+            set_parts = [f"{k}=%s" for k in fields] + ["updated_at=%s"]
+            vals = list(cleaned.values()) + [now_ts(), tg_id]
+            with db() as con, con.cursor() as cur:
+                cur.execute(
+                    f"UPDATE users SET {', '.join(set_parts)} WHERE tg_id=%s",
+                    tuple(vals),
+                )
+        else:
+            # даже если нечего обновлять — отметим updated_at
+            with db() as con, con.cursor() as cur:
+                cur.execute(
+                    "UPDATE users SET updated_at=%s WHERE tg_id=%s",
+                    (now_ts(), tg_id),
+                )
+
 
 def new_payment(tg_id: int, out_sum: float) -> int:
     with db() as con, con.cursor() as cur:
@@ -238,9 +258,9 @@ EMAIL_RE = re.compile(r"^[A-Za-z0-9_.+\-]+@[A-Za-z0-9\-]+\.[A-Za-z0-9\.\-]+$")
 async def on_start(message: Message):
     tg_id = message.from_user.id
     token = secrets.token_urlsafe(12)
-    upsert_user(tg_id, policy_token=token, status="new", created_at=now_ts(), updated_at=now_ts())
+    upsert_user(tg_id, policy_token=token, status="new")
     caption = (
-        "Привет! 👋\n\n"
+        "🌀Добро пожаловать! Чтобы подключиться к каналу, вам нужно оплатить подписку! 👋\n\n"
         "Перед началом подтвердите политику конфиденциальности, оставьте номер телефона и email.\n"
         "После оплаты откроется доступ в закрытый канал."
     )
