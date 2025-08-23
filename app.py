@@ -65,6 +65,27 @@ from fastapi.staticfiles import StaticFiles
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+from fastapi.responses import HTMLResponse
+
+@app.get("/", response_class=HTMLResponse)
+def root():
+    return HTMLResponse("<h3>OK: бот работает. /health тоже OK. Политика по кнопке в боте.</h3>")
+  @app.get("/policy-test", response_class=HTMLResponse)
+def policy_test():
+    path = "static/policy.html"
+    if not os.path.exists(path):
+        return HTMLResponse("<h2>static/policy.html не найден</h2>", status_code=404)
+    with open(path, "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+      
+@app.get("/policy/{token}", response_class=HTMLResponse)
+def policy_page(token: str):
+    # (обновление policy_viewed_at в БД у тебя уже есть)
+    with open("static/policy.html", "r", encoding="utf-8") as f:
+        html = f.read()
+    return HTMLResponse(content=html)
+
+
 
 WELCOME_IMAGE_PATH = "assets/welcome.png"
 
