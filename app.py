@@ -322,6 +322,23 @@ def get_or_make_token(tg_id: int) -> str:
     upsert_user(tg_id, policy_token=token, status="new")
     return token
 
+@dp.message(F.text == "📄 Документы")
+@dp.message(F.text == "/docs")
+async def on_docs(message: Message):
+    token = get_or_make_token(message.from_user.id)
+    await message.answer("Документы:", reply_markup=legal_keyboard(token))
+
+@dp.message(F.text == "💳 Оплатить подписку")
+async def on_pay_btn(message: Message):
+    inv_id = new_payment(message.from_user.id, PRICE_RUB)
+    url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
+    await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
+
+@dp.message(F.text == "📊 Мой статус")
+async def on_status_btn(message: Message):
+    # Можно вызвать твою логику /stats или вставить её сюда
+    await on_stats(message)  # если on_stats уже определён
+
 @dp.message(CommandStart())
 async def on_start(message: Message):
     tg_id = message.from_user.id
