@@ -4,7 +4,7 @@ import asyncio
 import secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import md5, sha256
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -13,18 +13,15 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import (Message, CallbackQuery, Update, InlineKeyboardMarkup,
-                           InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton,
-                           FSInputFile)
 from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton 
-from aiogram.types import Message, FSInputFile
-from fastapi.responses import HTMLResponse
-from aiogram.types import CallbackQuery
-from aiogram import F
+from aiogram.types import (
+    Message, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+    FSInputFile, Update,
+)
 
-# === Postgres (Supabase) ===
+# Postgres
 import psycopg
 from psycopg.rows import dict_row
 
@@ -55,17 +52,6 @@ if not DATABASE_URL:
 # =================== TG bot ===================
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
-
-# Главное меню (ReplyKeyboard — кнопки снизу)
-main_menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="💳 Оплатить подписку")],
-        [KeyboardButton(text="📄 Документы")],
-        [KeyboardButton(text="📊 Мой статус")],
-    ],
-    resize_keyboard=True,
-    one_time_keyboard=False
-)
 
 # =================== FastAPI ===================
 app = FastAPI(title="Telegram Subscription Bot (Supabase/Postgres)")
@@ -125,18 +111,17 @@ def init_db():
         valid_until TIMESTAMPTZ,
         last_invoice_id BIGINT,
         remind_3d_sent INT DEFAULT 0,
-        consent_viewed_at BIGINT,
+        consent_viewed_at TIMESTAMPTZ,
         offer_viewed_at BIGINT,
         legal_confirmed_at BIGINT,
-        valid_until BIGINT,
+        valid_until TIMESTAMPTZ,
         created_at TIMESTAMPTZ,
         updated_at TIMESTAMPTZ
     );
     
     # На случай если таблица уже была — добавим недостающие поля
-        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_viewed_at BIGINT;")
-        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS offer_viewed_at BIGINT;")
-        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS legal_confirmed_at BIGINT;")
+         cur.execute("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id)")
         con.commit()
         
     CREATE INDEX IF NOT EXISTS idx_users_tg ON users(tg_id);
@@ -268,20 +253,21 @@ def sign_result(out_sum: float, inv_id: int) -> str:
     return _sign(base)
 
 def build_pay_url(inv_id: int, out_sum: float, description: str = "Подписка на 30 дней") -> str:
-    from urllib.parse import urlencode
+    out_sum_str = f"{out_sum:.2f}"
+    base = f"{ROBOKASSA_LOGIN}:{out_sum_str}:{inv_id}:{ROBOKASSA_PASSWORD1}"
+    signature = sha256(base.encode()).hexdigest() if ROBOKASSA_SIGNATURE_ALG == "SHA256" else md5(base.encode()).hexdigest()
     params = {
         "MerchantLogin": ROBOKASSA_LOGIN,
-        "OutSum": f"{out_sum:.2f}",
+        "OutSum": out_sum_str,
         "InvId": str(inv_id),
-        "Description": description,
-        "SignatureValue": sign_success(out_sum, inv_id),
+        "Description": quote(description, safe=""),
+        "SignatureValue": signature,
         "Culture": "ru",
         "Encoding": "utf-8",
     }
-    if ROBOKASSA_TEST_MODE:
+    if str(ROBOKASSA_TEST_MODE) == "0":
         params["IsTest"] = "0"
-    base = "https://auth.robokassa.ru/Merchant/Index.aspx"
-    return f"{base}?{urlencode(params)}"
+    return "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
 
 @dp.message(F.text == "/pay")
 async def on_pay_cmd(message: Message):
@@ -295,12 +281,6 @@ async def on_pay_cmd(message: Message):
     await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
 
 # =================== UI helpers ===================
-def policy_kb(token: str) -> InlineKeyboardMarkup:
-    url = f"{BASE_URL}/policy/{token}"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📄 Политика конфиденциальности", url=url)],
-        [InlineKeyboardButton(text="✅ Я ознакомился и согласен", callback_data="policy_ack")]
-    ])
   
 def pay_kb(inv_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -333,24 +313,13 @@ main_menu = ReplyKeyboardMarkup(
 )
 
 def legal_keyboard(token: str) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="📄 Политика конфиденциальности",
-            url=f"{BASE_URL}/policy/{token}"
-        )],
-        [InlineKeyboardButton(
-            text="✅ Согласие на обработку данных",
-            url=f"{BASE_URL}/consent/{token}"
-        )],
-        [InlineKeyboardButton(
-            text="📑 Публичная оферта",
-            url=f"{BASE_URL}/offer/{token}"
-        )],
-        [InlineKeyboardButton(
-            text="✔️ Я ознакомился(лась)",
-            callback_data=f"legal_agree:{token}"
-        )],
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📄 Политика конфиденциальности", url=f"{BASE_URL}/policy/{token}")],
+        [InlineKeyboardButton(text="✅ Согласие на обработку данных", url=f"{BASE_URL}/consent/{token}")],
+        [InlineKeyboardButton(text="📑 Публичная оферта", url=f"{BASE_URL}/offer/{token}")],
+        [InlineKeyboardButton(text="✔️ Я ознакомился(лась)", callback_data=f"legal_agree:{token}")]
     ])
+
     return kb
 
 def get_or_make_token(tg_id: int) -> str:
@@ -441,20 +410,6 @@ async def on_legal_agree(cb: CallbackQuery):
     await cb.message.answer("Спасибо! ✅ Согласие зафиксировано.\nТеперь можно перейти к оплате.", reply_markup=pay_kb(build_pay_url(new_payment(tg_id, PRICE_RUB), PRICE_RUB, "Подписка на 30 дней")))
     await cb.answer()
   
-@dp.callback_query(F.data == "policy_ack")
-async def on_policy_ack(cb: CallbackQuery):
-    user = get_user(cb.from_user.id)
-    if not user or not user.get("policy_token"):
-        await cb.answer("Что-то пошло не так. Нажмите /start", show_alert=True)
-        return
-    if not user.get("policy_viewed_at"):
-        await cb.answer("Сначала откройте Политику по кнопке выше 🙏", show_alert=True)
-        return
-    upsert_user(cb.from_user.id, policy_accepted_at=now_ts(), status="pending")
-    await cb.message.answer("Отлично! Теперь пришлите номер телефона (кнопкой ниже).", reply_markup=contact_kb())
-    log_event(cb.from_user.id, "policy_accepted")
-    await cb.answer()
-
 @dp.message(F.contact)
 async def on_contact(message: Message):
     phone = message.contact.phone_number
@@ -681,13 +636,10 @@ def _read_html(path: str) -> str:
         return f.read()
 
 @app.get("/policy/{token}", response_class=HTMLResponse)
-def policy_page(token: str):
+def policy_with_token(token: str):
     try:
         with db() as con, con.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET policy_viewed_at=%s WHERE policy_token=%s",
-                (now_ts(), token)
-            )
+            cur.execute("UPDATE users SET policy_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
     except Exception as e:
         print("policy update failed:", e)
     return HTMLResponse(_read_html("static/policy.html"))
@@ -696,10 +648,7 @@ def policy_page(token: str):
 def consent_with_token(token: str):
     try:
         with db() as con, con.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s",
-                (now_ts(), token)
-            )
+            cur.execute("UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
     except Exception as e:
         print("consent update failed:", e)
     return HTMLResponse(_read_html("static/consent.html"))
@@ -708,15 +657,12 @@ def consent_with_token(token: str):
 def offer_with_token(token: str):
     try:
         with db() as con, con.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s",
-                (now_ts(), token)
-            )
+            cur.execute("UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
     except Exception as e:
         print("offer update failed:", e)
     return HTMLResponse(_read_html("static/offer.html"))
 
-# опциональные «плоские» странички без фиксации — для прямых ссылок/проверки
+# plain для прямой проверки
 @app.get("/policy", response_class=HTMLResponse)
 def policy_plain():  return HTMLResponse(_read_html("static/policy.html"))
 
@@ -725,6 +671,7 @@ def consent_plain(): return HTMLResponse(_read_html("static/consent.html"))
 
 @app.get("/offer", response_class=HTMLResponse)
 def offer_plain():   return HTMLResponse(_read_html("static/offer.html"))
+
 
 # =================== Robokassa callbacks ===================
 class RobokassaResult(BaseModel):
