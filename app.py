@@ -56,6 +56,13 @@ app = FastAPI(title="Telegram Subscription Bot (Supabase/Postgres)")
 @app.get("/health")
 def health():
     return {"status": "ok"}
+# сразу после импортов, ДО app.mount:
+import os
+os.makedirs("static", exist_ok=True)
+os.makedirs("assets", exist_ok=True)
+
+from fastapi.staticfiles import StaticFiles
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
