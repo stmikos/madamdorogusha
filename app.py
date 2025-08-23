@@ -353,7 +353,7 @@ async def on_start(message: Message):
     # Если есть приветственная картинка — покажем её
     try:
         await message.answer_photo(
-            FSInputFile("assets/welcome.jpg"),
+            FSInputFile("assets/welcome.png"),
             caption=welcome_text,
             reply_markup=legal_keyboard(token)
         )
