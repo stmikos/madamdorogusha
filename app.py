@@ -86,8 +86,6 @@ def policy_page(token: str):
         html = f.read()
     return HTMLResponse(content=html)
 
-
-
 WELCOME_IMAGE_PATH = "assets/welcome.png"
 
 # =================== DB helpers ===================
