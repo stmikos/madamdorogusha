@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
+from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
@@ -94,57 +95,44 @@ def db():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 def init_db():
-    ddl_users = '''
-    CREATE TABLE IF NOT EXISTS users(
-        id SERIAL PRIMARY KEY,
-        tg_id BIGINT UNIQUE,
-        email TEXT,
-        phone TEXT,
-        status TEXT,
-        policy_token TEXT,
-        policy_viewed_at TIMESTAMPTZ,
-        policy_accepted_at TIMESTAMPTZ,
-        status TEXT DEFAULT 'new',   -- new|pending|active|expired
-        valid_until TIMESTAMPTZ,
-        last_invoice_id BIGINT,
-        remind_3d_sent INT DEFAULT 0,
-        consent_viewed_at TIMESTAMPTZ,
-        offer_viewed_at BIGINT,
-        legal_confirmed_at BIGINT,
-        valid_until TIMESTAMPTZ,
-        created_at TIMESTAMPTZ,
-        updated_at TIMESTAMPTZ
-    );
-    
-    # На случай если таблица уже была — добавим недостающие поля
-         cur.execute("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id)")
+    with db() as con, con.cursor() as cur:
+        # users
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS users(
+            tg_id BIGINT PRIMARY KEY,
+            email TEXT,
+            phone TEXT,
+            status TEXT DEFAULT 'new',      -- new|pending|legal_ok|active|expired
+            policy_token TEXT,
+            policy_viewed_at TIMESTAMPTZ,
+            consent_viewed_at TIMESTAMPTZ,
+            offer_viewed_at TIMESTAMPTZ,
+            legal_confirmed_at TIMESTAMPTZ,
+            valid_until TIMESTAMPTZ,
+            last_invoice_id BIGINT,
+            remind_3d_sent INT DEFAULT 0,
+            created_at TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ
+        );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);")
+
+        # payments
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS payments(
+            inv_id BIGSERIAL PRIMARY KEY,
+            tg_id BIGINT,
+            out_sum NUMERIC(12,2),
+            status TEXT,                 -- created|paid|failed
+            created_at TIMESTAMPTZ,
+            paid_at TIMESTAMPTZ,
+            signature TEXT
+        );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);")
+
         con.commit()
-        
-    CREATE INDEX IF NOT EXISTS idx_users_tg ON users(tg_id);
-    '''
-    ddl_payments = '''
-    CREATE TABLE IF NOT EXISTS payments(
-        inv_id BIGSERIAL PRIMARY KEY,
-        tg_id BIGINT,
-        out_sum NUMERIC(12,2),
-        status TEXT,                 -- created|paid|failed
-        created_at TIMESTAMPTZ,
-        paid_at TIMESTAMPTZ,
-        signature TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);
-    '''
-    ddl_logs = '''
-    CREATE TABLE IF NOT EXISTS logs(
-        id BIGSERIAL PRIMARY KEY,
-        tg_id BIGINT,
-        event TEXT,
-        data TEXT,
-        created_at TIMESTAMPTZ
-    );
-    CREATE INDEX IF NOT EXISTS idx_logs_evt ON logs(event);
-    '''
+
     with db() as con, con.cursor() as cur:
         cur.execute(ddl_users)
         cur.execute(ddl_payments)
@@ -266,16 +254,27 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         params["IsTest"] = "0"
     return "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
 
-@dp.message(F.text == "/pay")
+@dp.message(Command("pay"))
 async def on_pay_cmd(message: Message):
     tg_id = message.from_user.id
     if not _legal_ok(tg_id):
         token = get_or_make_token(tg_id)
-        await message.answer("Сначала ознакомьтесь с документами и подтвердите согласие:", reply_markup=legal_keyboard(token))
+        await message.answer(
+            "Сначала ознакомьтесь с документами и подтвердите согласие:",
+            reply_markup=legal_keyboard(token)
+        )
         return
     inv_id = new_payment(tg_id, PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
     await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
+
+@dp.message(Command("stats"))
+async def on_stats_cmd(message: Message):
+    await on_stats(message)
+
+@dp.message(Command("admin"))
+async def on_admin_cmd(message: Message):
+    await on_admin(message)
 
 # =================== UI helpers ===================
   
@@ -482,7 +481,7 @@ async def on_stats(message: Message):
     else:
         await message.answer(text, parse_mode="Markdown")
 
-@dp.message(F.text == "/help")
+@dp.message(Command("help"))
 async def on_help(message: Message):
     await message.answer(
         "Команды:\n"
@@ -659,7 +658,7 @@ def offer_with_token(token: str):
         print("offer update failed:", e)
     return HTMLResponse(_read_html("static/offer.html"))
 
-# plain для прямой проверки
+# опционально «плоские» проверки статики
 @app.get("/policy", response_class=HTMLResponse)
 def policy_plain():  return HTMLResponse(_read_html("static/policy.html"))
 
@@ -668,8 +667,6 @@ def consent_plain(): return HTMLResponse(_read_html("static/consent.html"))
 
 @app.get("/offer", response_class=HTMLResponse)
 def offer_plain():   return HTMLResponse(_read_html("static/offer.html"))
-
-
 # =================== Robokassa callbacks ===================
 class RobokassaResult(BaseModel):
     OutSum: float
@@ -798,16 +795,43 @@ async def cron_ping():
 # =================== Startup ===================
 @app.on_event("startup")
 async def startup():
-    # Статика/политика
+    
     os.makedirs("static", exist_ok=True)
+    os.makedirs("assets", exist_ok=True)
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    
     if not os.path.exists("static/policy.html"):
         with open("static/policy.html", "w", encoding="utf-8") as f:
-            f.write("""<!doctype html><html lang="ru"><meta charset="utf-8">
+            f.write(content)
+            
+    ensure(
+        "static/policy.html",
+        """<!doctype html><html lang="ru"><meta charset="utf-8">
 <title>Политика конфиденциальности</title>
-<style>body{font:16px/1.6 system-ui, sans-serif; max-width:840px; margin:40px auto; padding:0 16px}</style>
+<style>body{font:16px/1.6 system-ui, sans-serif;max-width:840px;margin:40px auto;padding:0 16px}</style>
 <h1>Политика конфиденциальности</h1>
-<p> Факт открытия этой страницы фиксируется для подтверждения ознакомления.</p>
-</html>""")
+<p>Факт открытия страницы фиксируется для подтверждения ознакомления.</p>
+</html>"""
+    )
+    ensure(
+        "static/consent.html",
+        """<!doctype html><html lang="ru"><meta charset="utf-8">
+<title>Согласие на обработку персональных данных</title>
+<style>body{font:16px/1.6 system-ui, sans-serif;max-width:840px;margin:40px auto;padding:0 16px}</style>
+<h1>Согласие на обработку персональных данных</h1>
+<p>Нажимая кнопки в боте, вы даёте согласие на обработку ПДн в целях оказания услуги.</p>
+</html>"""
+    )
+    ensure(
+        "static/offer.html",
+        """<!doctype html><html lang="ru"><meta charset="utf-8">
+<title>Договор публичной оферты</title>
+<style>body{font:16px/1.6 system-ui, sans-serif;max-width:840px;margin:40px auto;padding:0 16px}</style>
+<h1>Договор публичной оферты</h1>
+<p>Оплата подписки означает акцепт условий настоящей оферты.</p>
+</html>"""
+    )
+    
     init_db()
     await set_webhook()
 
