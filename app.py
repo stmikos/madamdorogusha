@@ -1,9 +1,5 @@
 # ===== imports =====
-import os
-import re
-import asyncio
-import logging
-import secrets
+import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import md5, sha256
 from urllib.parse import urlencode
@@ -20,8 +16,7 @@ from aiogram.types import (
     Message, CallbackQuery, Update,
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton,
-    FSInputFile,
-    ErrorEvent,            # <— для обработчика ошибок
+    FSInputFile, ErrorEvent
 )
 
 import psycopg
@@ -52,9 +47,9 @@ SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
 if not BOT_TOKEN or not BASE_URL:
     raise RuntimeError("BOT_TOKEN и BASE_URL обязательны (BASE_URL без завершающего /).")
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL обязателен (с ?sslmode=require).")
+    raise RuntimeError("DATABASE_URL обязателен (?sslmode=require).")
 
-# ===== app & static =====
+# ===== FastAPI & static =====
 app = FastAPI(title="TG Sub Bot")
 os.makedirs("static", exist_ok=True)
 os.makedirs("assets", exist_ok=True)
@@ -65,13 +60,14 @@ def root():
     return HTMLResponse("<h3>OK: бот работает. Документы — по кнопкам в боте.</h3>")
 
 @app.get("/health")
-def health(): return {"status": "ok"}
+def health():
+    return {"status": "ok"}
 
-# ===== aiogram: must be BEFORE any @dp.* decorators =====
+# ===== Aiogram (ДОЛЖНО быть до любых @dp.* декораторов) =====
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
-# ---- error handler (теперь dp уже определён) ----
+# ---- error handler: теперь dp уже существует ----
 @dp.errors()
 async def on_aiogram_error(event: ErrorEvent):
     logger.exception("Aiogram handler error", exc_info=event.exception)
@@ -84,6 +80,7 @@ async def on_aiogram_error(event: ErrorEvent):
         except Exception:
             pass
     return True
+
 
 # ================= ENV =================
 load_dotenv()
