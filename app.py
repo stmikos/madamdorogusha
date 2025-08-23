@@ -795,14 +795,14 @@ async def cron_ping():
 # =================== Startup ===================
 @app.on_event("startup")
 async def startup():
-    
     os.makedirs("static", exist_ok=True)
     os.makedirs("assets", exist_ok=True)
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-    
-    if not os.path.exists("static/policy.html"):
-        with open("static/policy.html", "w", encoding="utf-8") as f:
-            f.write(content)
+
+    # локальная функция для автосоздания html-файлов
+    def ensure(path: str, content: str):
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
             
     ensure(
         "static/policy.html",
