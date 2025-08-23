@@ -20,6 +20,9 @@ from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton 
 from aiogram.types import Message, FSInputFile
+from fastapi.responses import HTMLResponse
+from aiogram.types import CallbackQuery
+from aiogram import F
 
 # === Postgres (Supabase) ===
 import psycopg
@@ -114,6 +117,7 @@ def init_db():
         tg_id BIGINT UNIQUE,
         email TEXT,
         phone TEXT,
+        status TEXT,
         policy_token TEXT,
         policy_viewed_at TIMESTAMPTZ,
         policy_accepted_at TIMESTAMPTZ,
@@ -121,9 +125,20 @@ def init_db():
         valid_until TIMESTAMPTZ,
         last_invoice_id BIGINT,
         remind_3d_sent INT DEFAULT 0,
+        consent_viewed_at BIGINT,
+        offer_viewed_at BIGINT,
+        legal_confirmed_at BIGINT,
+        valid_until BIGINT,
         created_at TIMESTAMPTZ,
         updated_at TIMESTAMPTZ
     );
+    
+    # На случай если таблица уже была — добавим недостающие поля
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_viewed_at BIGINT;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS offer_viewed_at BIGINT;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS legal_confirmed_at BIGINT;")
+        con.commit()
+        
     CREATE INDEX IF NOT EXISTS idx_users_tg ON users(tg_id);
     '''
     ddl_payments = '''
@@ -268,6 +283,17 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
     base = "https://auth.robokassa.ru/Merchant/Index.aspx"
     return f"{base}?{urlencode(params)}"
 
+@dp.message(F.text == "/pay")
+async def on_pay_cmd(message: Message):
+    tg_id = message.from_user.id
+    if not _legal_ok(tg_id):
+        token = get_or_make_token(tg_id)
+        await message.answer("Сначала ознакомьтесь с документами и подтвердите согласие:", reply_markup=legal_keyboard(token))
+        return
+    inv_id = new_payment(tg_id, PRICE_RUB)
+    url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
+    await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
+
 # =================== UI helpers ===================
 def policy_kb(token: str) -> InlineKeyboardMarkup:
     url = f"{BASE_URL}/policy/{token}"
@@ -309,8 +335,9 @@ main_menu = ReplyKeyboardMarkup(
 def legal_keyboard(token: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📄 Политика конфиденциальности", url=f"{BASE_URL}/policy/{token}")],
-        [InlineKeyboardButton(text="✅ Согласие на обработку данных", url=f"{BASE_URL}/consent")],
-        [InlineKeyboardButton(text="📑 Публичная оферта", url=f"{BASE_URL}/offer")],
+        [InlineKeyboardButton(text="✅ Согласие на обработку данных", url=f"{BASE_URL}/consent/{token}")],
+        [InlineKeyboardButton(text="📑 Публичная оферта", url=f"{BASE_URL}/offer/{token}")],
+        [InlineKeyboardButton(text="✔️ Я ознакомился(лась)", callback_data=f"legal_agree:{token}")]
     ])
 
 def get_or_make_token(tg_id: int) -> str:
@@ -331,6 +358,23 @@ async def on_docs(message: Message):
 @dp.message(F.text == "💳 Оплатить подписку")
 async def on_pay_btn(message: Message):
     inv_id = new_payment(message.from_user.id, PRICE_RUB)
+    url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
+    await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
+
+def _legal_ok(tg_id:int)->bool:
+    with db() as con, con.cursor() as cur:
+        cur.execute("SELECT legal_confirmed_at FROM users WHERE tg_id=%s", (tg_id,))
+        r = cur.fetchone()
+    return bool(r and r.get("legal_confirmed_at"))
+
+@dp.message(F.text == "💳 Оплатить подписку")
+async def on_pay_btn(message: Message):
+    tg_id = message.from_user.id
+    if not _legal_ok(tg_id):
+        token = get_or_make_token(tg_id)
+        await message.answer("Сначала ознакомьтесь с документами и подтвердите согласие:", reply_markup=legal_keyboard(token))
+        return
+    inv_id = new_payment(tg_id, PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
     await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
 
@@ -363,7 +407,26 @@ async def on_start(message: Message):
     # Показать главное меню (кнопки снизу)
     await message.answer("Выберите действие в меню ниже 👇", reply_markup=main_menu)
 
-
+@dp.callback_query(F.data.startswith("legal_agree:"))
+async def on_legal_agree(cb: CallbackQuery):
+    token = cb.data.split(":", 1)[1]
+    # Проверим, что все три документа были открыты (есть отметки)
+    with db() as con, con.cursor() as cur:
+        cur.execute("SELECT tg_id, policy_viewed_at, consent_viewed_at, offer_viewed_at FROM users WHERE policy_token=%s", (token,))
+        row = cur.fetchone()
+    if not row:
+        await cb.answer("Сессия не найдена. Наберите /start", show_alert=True)
+        return
+    tg_id = row["tg_id"]
+    if not (row.get("policy_viewed_at") and row.get("consent_viewed_at") and row.get("offer_viewed_at")):
+        await cb.answer("Пожалуйста, сначала откройте все документы (Политика, Согласие, Оферта).", show_alert=True)
+        return
+    # Отмечаем согласие
+    with db() as con, con.cursor() as cur:
+        cur.execute("UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s", (now_ts(), "legal_ok", tg_id))
+    await cb.message.answer("Спасибо! ✅ Согласие зафиксировано.\nТеперь можно перейти к оплате.", reply_markup=pay_kb(build_pay_url(new_payment(tg_id, PRICE_RUB), PRICE_RUB, "Подписка на 30 дней")))
+    await cb.answer()
+  
 @dp.callback_query(F.data == "policy_ack")
 async def on_policy_ack(cb: CallbackQuery):
     user = get_user(cb.from_user.id)
@@ -596,6 +659,36 @@ def policy_page(token: str):
     with open("static/policy.html", "r", encoding="utf-8") as f:
         html = f.read()
     return HTMLResponse(content=html)
+
+def _read_html(path:str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+@app.get("/consent", response_class=HTMLResponse)
+def consent_plain():
+    return HTMLResponse(_read_html("static/consent.html"))
+
+@app.get("/consent/{token}", response_class=HTMLResponse)
+def consent_with_token(token: str):
+    try:
+        with db() as con, con.cursor() as cur:
+            cur.execute("UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
+    except Exception as e:
+        print("consent update failed:", e)
+    return HTMLResponse(_read_html("static/consent.html"))
+
+@app.get("/offer", response_class=HTMLResponse)
+def offer_plain():
+    return HTMLResponse(_read_html("static/offer.html"))
+
+@app.get("/offer/{token}", response_class=HTMLResponse)
+def offer_with_token(token: str):
+    try:
+        with db() as con, con.cursor() as cur:
+            cur.execute("UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
+    except Exception as e:
+        print("offer update failed:", e)
+    return HTMLResponse(_read_html("static/offer.html"))
 
 # =================== Robokassa callbacks ===================
 class RobokassaResult(BaseModel):
