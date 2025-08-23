@@ -18,6 +18,8 @@ from aiogram.types import (Message, CallbackQuery, Update, InlineKeyboardMarkup,
                            FSInputFile)
 from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton 
+from aiogram.types import Message, FSInputFile
 
 # === Postgres (Supabase) ===
 import psycopg
@@ -50,6 +52,17 @@ if not DATABASE_URL:
 # =================== TG bot ===================
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
+
+# Главное меню (ReplyKeyboard — кнопки снизу)
+main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💳 Оплатить подписку")],
+        [KeyboardButton(text="📄 Документы")],
+        [KeyboardButton(text="📊 Мой статус")],
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False
+)
 
 # =================== FastAPI ===================
 app = FastAPI(title="Telegram Subscription Bot (Supabase/Postgres)")
@@ -263,21 +276,6 @@ def policy_kb(token: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="✅ Я ознакомился и согласен", callback_data="policy_ack")]
     ])
   
-def legal_keyboard(token: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="📄 Политика конфиденциальности",
-            url=f"{BASE_URL}/policy/{token}"
-        )],
-        [InlineKeyboardButton(
-            text="✅ Согласие на обработку данных",
-            url=f"{BASE_URL}/consent"
-        )],
-        [InlineKeyboardButton(
-            text="📑 Публичная оферта",
-            url=f"{BASE_URL}/offer"
-        )],
-    ])
 def pay_kb(inv_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💳 Оплатить {int(PRICE_RUB)} ₽ через Robokassa", url=inv_url)]
@@ -297,24 +295,57 @@ def contact_kb() -> ReplyKeyboardMarkup:
 EMAIL_RE = re.compile(r"^[A-Za-z0-9_.+\-]+@[A-Za-z0-9\-]+\.[A-Za-z0-9\.\-]+$")
 
 # =================== Handlers ===================
+# Главное меню (кнопки снизу)
+main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💳 Оплатить подписку")],
+        [KeyboardButton(text="📄 Документы")],
+        [KeyboardButton(text="📊 Мой статус")],
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False
+)
+
+def legal_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📄 Политика конфиденциальности", url=f"{BASE_URL}/policy/{token}")],
+        [InlineKeyboardButton(text="✅ Согласие на обработку данных", url=f"{BASE_URL}/consent")],
+        [InlineKeyboardButton(text="📑 Публичная оферта", url=f"{BASE_URL}/offer")],
+    ])
+
+def get_or_make_token(tg_id: int) -> str:
+    u = get_user(tg_id)
+    if u and u.get("policy_token"):
+        return u["policy_token"]
+    import secrets
+    token = secrets.token_urlsafe(12)
+    upsert_user(tg_id, policy_token=token, status="new")
+    return token
+
 @dp.message(CommandStart())
 async def on_start(message: Message):
     tg_id = message.from_user.id
-    token = secrets.token_urlsafe(12)
-    upsert_user(tg_id, policy_token=token, status="new")
-    caption = (
-        "🌀Добро пожаловать! ! 👋\n\n"
-        "Перед использованием сервиса просим ознакомиться с документами, оставьте номер телефона и email.\n"
-        "После оплаты откроется доступ в закрытый канал."
+    token = get_or_make_token(tg_id)
+
+    welcome_text = (
+        "👋 Добро пожаловать!\n\n"
+        "Перед использованием сервиса просим ознакомиться с документами.\n"
+        "После подтверждения вы сможете ввести контакты и перейти к оплате."
     )
-    if os.path.exists(WELCOME_IMAGE_PATH):
+
+    # Если есть приветственная картинка — покажем её
+    try:
         await message.answer_photo(
-            FSInputFile(WELCOME_IMAGE_PATH),
-            caption=caption, reply_markup=policy_kb(token)
+            FSInputFile("assets/welcome.jpg"),
+            caption=welcome_text,
+            reply_markup=legal_keyboard(token)
         )
-    else:
-        await message.answer(caption, reply_markup=policy_kb(token))
-    log_event(tg_id, "start", f"username={message.from_user.username}")
+    except Exception:
+        await message.answer(welcome_text, reply_markup=legal_keyboard(token))
+
+    # Показать главное меню (кнопки снизу)
+    await message.answer("Выберите действие в меню ниже 👇", reply_markup=main_menu)
+
 
 @dp.callback_query(F.data == "policy_ack")
 async def on_policy_ack(cb: CallbackQuery):
@@ -685,7 +716,7 @@ async def startup():
 <title>Политика конфиденциальности</title>
 <style>body{font:16px/1.6 system-ui, sans-serif; max-width:840px; margin:40px auto; padding:0 16px}</style>
 <h1>Политика конфиденциальности</h1>
-<p>Это пример политики. Замените содержимое на свою политику. Факт открытия этой страницы фиксируется для подтверждения ознакомления.</p>
+<p> Факт открытия этой страницы фиксируется для подтверждения ознакомления.</p>
 </html>""")
     init_db()
     await set_webhook()
