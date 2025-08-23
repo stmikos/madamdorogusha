@@ -70,7 +70,8 @@ from fastapi.responses import HTMLResponse
 @app.get("/", response_class=HTMLResponse)
 def root():
     return HTMLResponse("<h3>OK: бот работает. /health тоже OK. Политика по кнопке в боте.</h3>")
-  @app.get("/policy-test", response_class=HTMLResponse)
+ 
+@app.get("/policy-test", response_class=HTMLResponse)
 def policy_test():
     path = "static/policy.html"
     if not os.path.exists(path):
