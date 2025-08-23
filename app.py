@@ -2,7 +2,7 @@
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import md5, sha256
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote   # <-- добавили quote
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -38,8 +38,8 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
 ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "")
 ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "")
 ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "")
-ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "MD5").upper()
-ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "1")
+ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "MD5").upper()   # MD5|SHA256
+ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0")                     # "1" тест, "0" боевой
 
 PRICE_RUB = float(os.getenv("PRICE_RUB", "289"))
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
@@ -60,14 +60,13 @@ def root():
     return HTMLResponse("<h3>OK: бот работает. Документы — по кнопкам в боте.</h3>")
 
 @app.get("/health")
-def health():
-    return {"status": "ok"}
+def health(): return {"status": "ok"}
 
-# ===== Aiogram (ДОЛЖНО быть до любых @dp.* декораторов) =====
+# ===== Aiogram (до любых @dp.*) =====
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
-# ---- error handler: теперь dp уже существует ----
+# ---- error handler ----
 @dp.errors()
 async def on_aiogram_error(event: ErrorEvent):
     logger.exception("Aiogram handler error", exc_info=event.exception)
@@ -80,59 +79,6 @@ async def on_aiogram_error(event: ErrorEvent):
         except Exception:
             pass
     return True
-
-
-# ================= ENV =================
-load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = os.getenv("BASE_URL", "").rstrip("/")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", secrets.token_urlsafe(16))
-DATABASE_URL = os.getenv("DATABASE_URL")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
-
-ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "")
-ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "")
-ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "")
-ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "MD5").upper()  # MD5|SHA256
-ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0")  # "1" тест, "0" боевой
-
-PRICE_RUB = float(os.getenv("PRICE_RUB", "289"))
-SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
-
-if not BOT_TOKEN or not BASE_URL:
-    raise RuntimeError("BOT_TOKEN и BASE_URL обязательны (BASE_URL без завершающего /).")
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL обязателен (с ?sslmode=require).")
-
-# ================= FastAPI / Static =================
-app = FastAPI(title="TG Sub Bot")
-os.makedirs("static", exist_ok=True)
-os.makedirs("assets", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
-def root():
-    return HTMLResponse("<h3>OK: бот работает. Документы — по кнопкам в боте.</h3>")
-
-@app.get("/health")
-def health(): return {"status": "ok"}
-
-# ================= TG bot =================
-bot = Bot(BOT_TOKEN)
-dp = Dispatcher()
-
-WELCOME_IMAGE_PATH = "assets/welcome.png"
-EMAIL_RE = re.compile(r"^[A-Za-z0-9_.+\-]+@[A-Za-z0-9\-]+\.[A-Za-z0-9\.\-]+$")
-
-main_menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="💳 Оплатить подписку")],
-        [KeyboardButton(text="📄 Документы")],
-        [KeyboardButton(text="📊 Мой статус")],
-    ],
-    resize_keyboard=True
-)
 
 # ================= DB helpers =================
 def db():
