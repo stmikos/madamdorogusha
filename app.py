@@ -1,11 +1,12 @@
-# app.py
+# ===== imports =====
 import os
 import re
 import asyncio
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import md5, sha256
-from urllib.parse import urlencode, quote
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -19,24 +20,61 @@ from aiogram.types import (
     Message, CallbackQuery, Update,
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton,
-    FSInputFile
+    FSInputFile,
+    ErrorEvent,            # <— для обработчика ошибок
 )
 
 import psycopg
 from psycopg.rows import dict_row
 
-import logging
+# ===== logging =====
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
-from aiogram.types import ErrorEvent
+# ===== env =====
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+BASE_URL = os.getenv("BASE_URL", "").rstrip("/")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", secrets.token_urlsafe(16))
+DATABASE_URL = os.getenv("DATABASE_URL")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
 
+ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "")
+ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "")
+ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "")
+ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "MD5").upper()
+ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "1")
+
+PRICE_RUB = float(os.getenv("PRICE_RUB", "289"))
+SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
+
+if not BOT_TOKEN or not BASE_URL:
+    raise RuntimeError("BOT_TOKEN и BASE_URL обязательны (BASE_URL без завершающего /).")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL обязателен (с ?sslmode=require).")
+
+# ===== app & static =====
+app = FastAPI(title="TG Sub Bot")
+os.makedirs("static", exist_ok=True)
+os.makedirs("assets", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
+def root():
+    return HTMLResponse("<h3>OK: бот работает. Документы — по кнопкам в боте.</h3>")
+
+@app.get("/health")
+def health(): return {"status": "ok"}
+
+# ===== aiogram: must be BEFORE any @dp.* decorators =====
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher()
+
+# ---- error handler (теперь dp уже определён) ----
 @dp.errors()
 async def on_aiogram_error(event: ErrorEvent):
-    # Полный стектрейс в логи Render
     logger.exception("Aiogram handler error", exc_info=event.exception)
-
-    # Уведомим админа кратко
     if ADMIN_USER_ID:
         try:
             await bot.send_message(
@@ -45,10 +83,7 @@ async def on_aiogram_error(event: ErrorEvent):
             )
         except Exception:
             pass
-
-    # Вернуть True, чтобы ошибка считалась обработанной (не рушила обработку)
     return True
-
 
 # ================= ENV =================
 load_dotenv()
