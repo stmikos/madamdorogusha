@@ -11,7 +11,6 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import (
@@ -63,8 +62,6 @@ def health():
 import os
 os.makedirs("static", exist_ok=True)
 os.makedirs("assets", exist_ok=True)
-
-from fastapi.staticfiles import StaticFiles
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -629,8 +626,6 @@ def policy_page(token: str):
         html = f.read()
     return HTMLResponse(content=html)
 
-from fastapi.responses import HTMLResponse
-
 def _read_html(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
@@ -646,6 +641,7 @@ def policy_with_token(token: str):
 
 @app.get("/consent/{token}", response_class=HTMLResponse)
 def consent_with_token(token: str):
+    print(f"[DOC] open consent token={token}")
     try:
         with db() as con, con.cursor() as cur:
             cur.execute("UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
@@ -655,6 +651,7 @@ def consent_with_token(token: str):
 
 @app.get("/offer/{token}", response_class=HTMLResponse)
 def offer_with_token(token: str):
+    print(f"[DOC] open offer token={token}")
     try:
         with db() as con, con.cursor() as cur:
             cur.execute("UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
