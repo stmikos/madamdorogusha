@@ -279,7 +279,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "Encoding": "utf-8",
     }
     if ROBOKASSA_TEST_MODE:
-        params["IsTest"] = "1"
+        params["IsTest"] = "0"
     base = "https://auth.robokassa.ru/Merchant/Index.aspx"
     return f"{base}?{urlencode(params)}"
 
@@ -304,7 +304,7 @@ def policy_kb(token: str) -> InlineKeyboardMarkup:
   
 def pay_kb(inv_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💳 Оплатить {int(PRICE_RUB)} ₽ через Robokassa", url=inv_url)]
+        [InlineKeyboardButton(text=f"💳 Оплатить {int(PRICE_RUB)} 289₽ через Robokassa", url=inv_url)]
     ])
 
 def renew_kb(inv_url: str) -> InlineKeyboardMarkup:
@@ -376,6 +376,7 @@ async def on_pay_btn(message: Message):
         return
     inv_id = new_payment(tg_id, PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
+    print("[pay_link]", url)
     await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
 
 @dp.message(F.text == "📊 Мой статус")
