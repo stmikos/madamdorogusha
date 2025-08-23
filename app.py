@@ -86,25 +86,31 @@ def now_ts():
 
 def init_db():
     with db() as con, con.cursor() as cur:
+        # --- users: создаём минимальную основу ---
         cur.execute("""
         CREATE TABLE IF NOT EXISTS users(
             tg_id BIGINT PRIMARY KEY,
-            email TEXT,
-            phone TEXT,
-            status TEXT DEFAULT 'new',      -- new|legal_ok|active|expired
-            policy_token TEXT,
-            policy_viewed_at TIMESTAMPTZ,
-            consent_viewed_at TIMESTAMPTZ,
-            offer_viewed_at TIMESTAMPTZ,
-            legal_confirmed_at TIMESTAMPTZ,
-            valid_until TIMESTAMPTZ,
-            last_invoice_id BIGINT,
-            remind_3d_sent INT DEFAULT 0,
             created_at TIMESTAMPTZ,
             updated_at TIMESTAMPTZ
         );
         """)
+
+        # --- users: гарантируем все нужные поля (безопасно, если уже есть) ---
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new';")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_token TEXT;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_viewed_at TIMESTAMPTZ;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_viewed_at TIMESTAMPTZ;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS offer_viewed_at TIMESTAMPTZ;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS legal_confirmed_at TIMESTAMPTZ;")  # <-- критичная колонка
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_invoice_id BIGINT;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS remind_3d_sent INT DEFAULT 0;")
+
         cur.execute("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);")
+
+        # --- payments ---
         cur.execute("""
         CREATE TABLE IF NOT EXISTS payments(
             inv_id BIGSERIAL PRIMARY KEY,
@@ -117,7 +123,9 @@ def init_db():
         );
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);")
+
         con.commit()
+
 
 def get_user(tg_id: int):
     with db() as con, con.cursor() as cur:
