@@ -17,6 +17,24 @@ from aiogram.types import (Message, CallbackQuery, Update, InlineKeyboardMarkup,
                            InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton,
                            FSInputFile)
 from aiogram.filters import CommandStart
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+def legal_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📄 Политика конфиденциальности",
+            url=f"{BASE_URL}/policy/{token}"
+        )],
+        [InlineKeyboardButton(
+            text="✅ Согласие на обработку данных",
+            url=f"{BASE_URL}/consent"
+        )],
+        [InlineKeyboardButton(
+            text="📑 Публичная оферта",
+            url=f"{BASE_URL}/offer"
+        )],
+    ])
+
 
 # === Postgres (Supabase) ===
 import psycopg
@@ -288,7 +306,7 @@ async def on_start(message: Message):
     upsert_user(tg_id, policy_token=token, status="new")
     caption = (
         "🌀Добро пожаловать! Чтобы подключиться к каналу, вам нужно оплатить подписку! 👋\n\n"
-        "Перед началом подтвердите политику конфиденциальности, оставьте номер телефона и email.\n"
+        "Перед использованием сервиса просим ознакомиться с документами:, оставьте номер телефона и email.\n"
         "После оплаты откроется доступ в закрытый канал."
     )
     if os.path.exists(WELCOME_IMAGE_PATH):
