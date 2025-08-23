@@ -25,6 +25,31 @@ from aiogram.types import (
 import psycopg
 from psycopg.rows import dict_row
 
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("app")
+
+from aiogram.types import ErrorEvent
+
+@dp.errors()
+async def on_aiogram_error(event: ErrorEvent):
+    # Полный стектрейс в логи Render
+    logger.exception("Aiogram handler error", exc_info=event.exception)
+
+    # Уведомим админа кратко
+    if ADMIN_USER_ID:
+        try:
+            await bot.send_message(
+                ADMIN_USER_ID,
+                f"⚠️ Ошибка в боте: {type(event.exception).__name__}\n{event.exception}"
+            )
+        except Exception:
+            pass
+
+    # Вернуть True, чтобы ошибка считалась обработанной (не рушила обработку)
+    return True
+
+
 # ================= ENV =================
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -179,8 +204,8 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "Culture": "ru",
         "Encoding": "utf-8",
     }
-    if ROBOKASSA_TEST_MODE == "1":
-        params["IsTest"] = "1"
+    if ROBOKASSA_TEST_MODE == "0":
+        params["IsTest"] = "0"
     return "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
 
 def new_payment(tg_id: int, out_sum: float) -> int:
