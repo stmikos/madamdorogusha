@@ -333,12 +333,25 @@ main_menu = ReplyKeyboardMarkup(
 )
 
 def legal_keyboard(token: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📄 Политика конфиденциальности", url=f"{BASE_URL}/policy/{token}")],
-        [InlineKeyboardButton(text="✅ Согласие на обработку данных", url=f"{BASE_URL}/consent/{token}")],
-        [InlineKeyboardButton(text="📑 Публичная оферта", url=f"{BASE_URL}/offer/{token}")],
-        [InlineKeyboardButton(text="✔️ Я ознакомился(лась)", callback_data=f"legal_agree:{token}")]
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📄 Политика конфиденциальности",
+            url=f"{BASE_URL}/policy/{token}"
+        )],
+        [InlineKeyboardButton(
+            text="✅ Согласие на обработку данных",
+            url=f"{BASE_URL}/consent/{token}"
+        )],
+        [InlineKeyboardButton(
+            text="📑 Публичная оферта",
+            url=f"{BASE_URL}/offer/{token}"
+        )],
+        [InlineKeyboardButton(
+            text="✔️ Я ознакомился(лась)",
+            callback_data=f"legal_agree:{token}"
+        )],
     ])
+    return kb
 
 def get_or_make_token(tg_id: int) -> str:
     u = get_user(tg_id)
@@ -661,35 +674,57 @@ def policy_page(token: str):
         html = f.read()
     return HTMLResponse(content=html)
 
-def _read_html(path:str) -> str:
+from fastapi.responses import HTMLResponse
+
+def _read_html(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
-@app.get("/consent", response_class=HTMLResponse)
-def consent_plain():
-    return HTMLResponse(_read_html("static/consent.html"))
+@app.get("/policy/{token}", response_class=HTMLResponse)
+def policy_page(token: str):
+    try:
+        with db() as con, con.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET policy_viewed_at=%s WHERE policy_token=%s",
+                (now_ts(), token)
+            )
+    except Exception as e:
+        print("policy update failed:", e)
+    return HTMLResponse(_read_html("static/policy.html"))
 
 @app.get("/consent/{token}", response_class=HTMLResponse)
 def consent_with_token(token: str):
     try:
         with db() as con, con.cursor() as cur:
-            cur.execute("UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
+            cur.execute(
+                "UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s",
+                (now_ts(), token)
+            )
     except Exception as e:
         print("consent update failed:", e)
     return HTMLResponse(_read_html("static/consent.html"))
-
-@app.get("/offer", response_class=HTMLResponse)
-def offer_plain():
-    return HTMLResponse(_read_html("static/offer.html"))
 
 @app.get("/offer/{token}", response_class=HTMLResponse)
 def offer_with_token(token: str):
     try:
         with db() as con, con.cursor() as cur:
-            cur.execute("UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
+            cur.execute(
+                "UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s",
+                (now_ts(), token)
+            )
     except Exception as e:
         print("offer update failed:", e)
     return HTMLResponse(_read_html("static/offer.html"))
+
+# опциональные «плоские» странички без фиксации — для прямых ссылок/проверки
+@app.get("/policy", response_class=HTMLResponse)
+def policy_plain():  return HTMLResponse(_read_html("static/policy.html"))
+
+@app.get("/consent", response_class=HTMLResponse)
+def consent_plain(): return HTMLResponse(_read_html("static/consent.html"))
+
+@app.get("/offer", response_class=HTMLResponse)
+def offer_plain():   return HTMLResponse(_read_html("static/offer.html"))
 
 # =================== Robokassa callbacks ===================
 class RobokassaResult(BaseModel):
