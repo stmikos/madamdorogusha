@@ -2,7 +2,7 @@
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import md5, sha256
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -455,23 +455,35 @@ def ensure(path: str, content: str):
 
 @app.on_event("startup")
 async def startup():
-    # Автосоздание файлов документов
-    ensure("static/policy.html",
-           """<!doctype html><meta charset="utf-8"><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>""")
-    ensure("static/consent.html",
-           """<!doctype html><meta charset="utf-8"><h1>Согласие на обработку ПДн</h1><p>Открытие фиксируется.</p>""")
-    ensure("static/offer.html",
-           """<!doctype html><meta charset="utf-8"><h1>Публичная оферта</h1><p>Открытие фиксируется.</p>""")
+  @app.on_event("startup")
+async def startup():
+    # 1) создаём статические файлы, если их нет
+    ensure(
+        "static/policy.html",
+        """<!doctype html><meta charset="utf-8"><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>"""
+    )
+    ensure(
+        "static/consent.html",
+        """<!doctype html><meta charset="utf-8"><h1>Согласие на обработку ПДн</h1><p>Открытие фиксируется.</p>"""
+    )
+    ensure(
+        "static/offer.html",
+        """<!doctype html><meta charset="utf-8"><h1>Публичная оферта</h1><p>Открытие фиксируется.</p>"""
+    )
 
+    # 2) инициализируем БД (создаст/добавит недостающие колонки)
     init_db()
 
+    # 3) ставим вебхук
     try:
-        await bot.set_webhook(f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}")
+        webhook_url = f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}"
+        await bot.set_webhook(webhook_url)
         me = await bot.get_me()
-        logger.info("Webhook set for @%s (%s)", me.username, me.id)
+        logger.info("Webhook set to %s for @%s (%s)", webhook_url, me.username, me.id)
     except Exception as e:
         logger.exception("Failed to set webhook: %s", e)
 
+    # 4) фон. цикл (если нужен; сейчас «пустой» таймер)
     async def loop():
         while True:
             await asyncio.sleep(3600)
