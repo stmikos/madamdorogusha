@@ -109,6 +109,7 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_invoice_id BIGINT;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS remind_3d_sent INT DEFAULT 0;")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_pay_msg_id BIGINT;")
 
         cur.execute("""
         CREATE TABLE IF NOT EXISTS payments(
@@ -190,7 +191,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "Encoding": "utf-8",
     }
     # В ТЕСТЕ обязательно указывать IsTest=1
-    if str(ROBOKASSA_TEST_MODE).strip() == "0":
+    if str(ROBOKASSA_TEST_MODE).strip() == "1":
         params["IsTest"] = "1"
 
     url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
@@ -333,42 +334,35 @@ async def on_legal_agree(cb: CallbackQuery) -> None:
     upsert_user(row["tg_id"], last_pay_msg_id=m.message_id)
 
     await cb.answer()
-
 @dp.message(F.text == "💳 Оплатить подписку")
 @dp.message(Command("pay"))
 async def on_pay(message: Message):
     tg_id = message.from_user.id
 
+    # 1) проверяем согласие
     if not _legal_ok(tg_id):
-        # чистим старую кнопку оплаты
-        u = get_user(tg_id)
-        old_id = (u or {}).get("last_pay_msg_id")
-        if old_id:
-            try:
-                await bot.delete_message(chat_id=message.chat.id, message_id=old_id)
-            except Exception:
-                pass
-
         token = get_or_make_token(tg_id)
         await message.answer(
             "Сначала ознакомьтесь с документами и подтвердите согласие:",
-            reply_markup=legal_keyboard(token),
+            reply_markup=legal_keyboard(token)
         )
         return
 
-    inv_id = new_payment(tg_id, PRICE_RUB)
-    url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
-
-    # чистим прошлую кнопку оплаты
-    u = get_user(tg_id)
-    old_id = (u or {}).get("last_pay_msg_id")
-    if old_id:
+    # 2) удаляем предыдущее сообщение-оплату, если было
+    row = get_user(tg_id) or {}
+    prev_id = row.get("last_pay_msg_id")
+    if prev_id:
         try:
-            await bot.delete_message(chat_id=message.chat.id, message_id=old_id)
+            await bot.delete_message(chat_id=message.chat.id, message_id=prev_id)
         except Exception:
             pass
 
+    # 3) создаём новый счёт и отправляем кнопку
+    inv_id = new_payment(tg_id, PRICE_RUB)
+    url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
     m = await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
+
+    # 4) запоминаем id этого сообщения, чтобы в следующий раз удалить
     upsert_user(tg_id, last_pay_msg_id=m.message_id)
 
 def bar(progress: float, width: int = 20) -> str:
