@@ -2,7 +2,7 @@
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import md5, sha256
-from urllib.parse import urlencode, quote
+from urllib.parse import urlencode, quote_plus
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -155,30 +155,48 @@ def list_active_users():
         return cur.fetchall()
 
 # ===== Robokassa =====
+from decimal import Decimal, ROUND_HALF_UP
+from urllib.parse import urlencode, quote_plus
+
+def _fmt_amount(val: float | Decimal) -> str:
+    # фиксируем формат суммы: две цифры после запятой, точка как разделитель
+    d = Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{d:.2f}"
+
 def _sign(s: str) -> str:
-    return sha256(s.encode()).hexdigest() if ROBOKASSA_SIGNATURE_ALG == "SHA256" else md5(s.encode()).hexdigest()
+    return sha256(s.encode("utf-8")).hexdigest() if ROBOKASSA_SIGNATURE_ALG == "SHA256" else md5(s.encode("utf-8")).hexdigest()
 
 def sign_success(out_sum: float, inv_id: int) -> str:
-    base = f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD1}"
+    # ВАЖНО: подпись для формы оплаты считается по Login:OutSum:InvId:Password1
+    out_sum_str = _fmt_amount(out_sum)
+    base = f"{ROBOKASSA_LOGIN}:{out_sum_str}:{inv_id}:{ROBOKASSA_PASSWORD1}"
     return _sign(base)
 
 def sign_result(out_sum: float, inv_id: int) -> str:
-    base = f"{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD2}"
+    # Подпись для RESULT URL: OutSum:InvId:Password2
+    out_sum_str = _fmt_amount(out_sum)
+    base = f"{out_sum_str}:{inv_id}:{ROBOKASSA_PASSWORD2}"
     return _sign(base)
 
 def build_pay_url(inv_id: int, out_sum: float, description: str = "Подписка на 30 дней") -> str:
+    out_sum_str = _fmt_amount(out_sum)
     params = {
         "MerchantLogin": ROBOKASSA_LOGIN,
-        "OutSum": f"{out_sum:.2f}",
+        "OutSum": out_sum_str,
         "InvId": str(inv_id),
-        "Description": description,   # urlencode сделает экранирование
+        "Description": quote_plus(description),  # безопасно кодируем
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture": "ru",
         "Encoding": "utf-8",
     }
-    if ROBOKASSA_TEST_MODE == "0":
-        params["IsTest"] = "0"
-    return "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
+    # В ТЕСТЕ обязательно указывать IsTest=1
+    if str(ROBOKASSA_TEST_MODE).strip() == "0":
+        params["IsTest"] = "1"
+
+    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
+    # для отладки можно временно залогировать:
+    print("[RK DEBUG]", params)
+    return url
 
 def new_payment(tg_id: int, out_sum: float) -> int:
     with db() as con, con.cursor() as cur:
@@ -285,9 +303,22 @@ async def on_legal_agree(cb: CallbackQuery):
     with db() as con, con.cursor() as cur:
         cur.execute("UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
                     (now_ts(), "legal_ok", row["tg_id"]))
-    inv_id = new_payment(row["tg_id"], PRICE_RUB)
+       inv_id = new_payment(row["tg_id"], PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
-    await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
+
+    # ⬇️ Удаляем прошлое сообщение с оплатой, если было
+    u = get_user(row["tg_id"])
+    old_id = (u or {}).get("last_pay_msg_id")
+    if old_id:
+        try:
+            await bot.delete_message(chat_id=cb.message.chat.id, message_id=old_id)
+        except Exception:
+            pass
+
+    # ⬇️ Отправляем новое и сохраняем message_id
+    m = await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
+    upsert_user(row["tg_id"], last_pay_msg_id=m.message_id)
+
     await cb.answer()
 
 @dp.message(F.text == "💳 Оплатить подписку")
@@ -298,9 +329,21 @@ async def on_pay(message: Message):
         token = get_or_make_token(tg_id)
         await message.answer("Сначала ознакомьтесь с документами и подтвердите согласие:", reply_markup=legal_keyboard(token))
         return
-    inv_id = new_payment(tg_id, PRICE_RUB)
+       inv_id = new_payment(tg_id, PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
-    await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
+
+    # ⬇️ УДАЛЯЕМ прошлое сообщение с оплатой, если было
+    u = get_user(tg_id)
+    old_id = (u or {}).get("last_pay_msg_id")
+    if old_id:
+        try:
+            await bot.delete_message(chat_id=message.chat.id, message_id=old_id)
+        except Exception:
+            pass
+
+    # ⬇️ ОТПРАВЛЯЕМ новое и сохраняем его message_id
+    m = await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
+    upsert_user(tg_id, last_pay_msg_id=m.message_id)
 
 def bar(progress: float, width: int = 20) -> str:
     filled = int(round(progress * width))
