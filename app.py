@@ -441,6 +441,123 @@ def pay_fail():
     return HTMLResponse("<h2>Оплата не завершена. Вы можете повторить попытку в боте.</h2>")
 
 # ===== Webhook & startup =====
+# ======= Документные страницы (фиксируют просмотр) =======
+def _read_html(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+@app.get("/policy/{token}", response_class=HTMLResponse)
+def policy_with_token(token: str):
+    try:
+        with db() as con, con.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET policy_viewed_at=%s WHERE policy_token=%s",
+                (now_ts(), token)
+            )
+    except Exception as e:
+        logger.warning("policy update failed: %s", e)
+    return HTMLResponse(_read_html("static/policy.html"))
+
+@app.get("/consent/{token}", response_class=HTMLResponse)
+def consent_with_token(token: str):
+    try:
+        with db() as con, con.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s",
+                (now_ts(), token)
+            )
+    except Exception as e:
+        logger.warning("consent update failed: %s", e)
+    return HTMLResponse(_read_html("static/consent.html"))
+
+@app.get("/offer/{token}", response_class=HTMLResponse)
+def offer_with_token(token: str):
+    try:
+        with db() as con, con.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s",
+                (now_ts(), token)
+            )
+    except Exception as e:
+        logger.warning("offer update failed: %s", e)
+    return HTMLResponse(_read_html("static/offer.html"))
+
+# Plain-страницы для ручной проверки (без фиксации)
+@app.get("/policy", response_class=HTMLResponse)
+def policy_plain():
+    return HTMLResponse(_read_html("static/policy.html"))
+
+@app.get("/consent", response_class=HTMLResponse)
+def consent_plain():
+    return HTMLResponse(_read_html("static/consent.html"))
+
+@app.get("/offer", response_class=HTMLResponse)
+def offer_plain():
+    return HTMLResponse(_read_html("static/offer.html"))
+
+# ======= Robokassa callbacks =======
+class RobokassaResult(BaseModel):
+    OutSum: float
+    InvId: int
+    SignatureValue: str
+
+def _eq_ci(a: str, b: str) -> bool:
+    return (a or "").lower() == (b or "").lower()
+
+@app.post("/pay/result")
+async def pay_result(request: Request):
+    data = dict(await request.form())
+    try:
+        out_sum = float(data.get("OutSum"))
+        inv_id = int(data.get("InvId"))
+        sig = data.get("SignatureValue")
+    except Exception:
+        raise HTTPException(400, "Bad payload")
+
+    expected = sign_result(out_sum, inv_id)
+    if not _eq_ci(sig, expected):
+        with db() as con, con.cursor() as cur:
+            cur.execute("UPDATE payments SET status='failed' WHERE inv_id=%s", (inv_id,))
+        raise HTTPException(403, "Invalid signature")
+
+    set_payment_paid(inv_id)
+    with db() as con, con.cursor() as cur:
+        cur.execute("SELECT tg_id FROM payments WHERE inv_id=%s", (inv_id,))
+        row = cur.fetchone()
+    if not row:
+        return PlainTextResponse(f"OK{inv_id}")
+    tg_id = row["tg_id"]
+
+    valid_until = now_ts() + timedelta(days=SUBSCRIPTION_DAYS)
+    upsert_user(tg_id, status="active", valid_until=valid_until, remind_3d_sent=0)
+
+    try:
+        expire_at = now_ts() + timedelta(days=2)
+        link = await bot.create_chat_invite_link(
+            chat_id=CHANNEL_ID,
+            name=f"Sub {tg_id} {inv_id}",
+            expire_date=int(expire_at.timestamp()),
+            member_limit=1
+        )
+        await bot.send_message(
+            tg_id,
+            f"Оплата получена ✅\nВаша ссылка в закрытый канал:\n{link.invite_link}"
+        )
+    except Exception as e:
+        if ADMIN_USER_ID:
+            await bot.send_message(ADMIN_USER_ID, f"Не удалось создать инвайт: {e}")
+
+    return PlainTextResponse(f"OK{inv_id}")
+
+@app.get("/pay/success")
+def pay_success():
+    return HTMLResponse("<h2>Спасибо! Оплата прошла. Вернитесь в Telegram — приглашение уже ждёт вас в боте.</h2>")
+
+@app.get("/pay/fail")
+def pay_fail():
+    return HTMLResponse("<h2>Оплата не завершена. Вы можете повторить попытку в боте.</h2>")
+
+# ======= Webhook =======
 @app.post(f"/telegram/webhook/{WEBHOOK_SECRET}")
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -448,40 +565,29 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
+async def set_webhook():
+    await bot.set_webhook(f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}")
+
 def ensure(path: str, content: str):
     if not os.path.exists(path):
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
 
-  @app.on_event("startup")
+# ======= Startup =======
+@app.on_event("startup")
 async def startup():
-    # 1) создаём статические файлы, если их нет
-    ensure(
-        "static/policy.html",
-        """<!doctype html><meta charset="utf-8"><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>"""
-    )
-    ensure(
-        "static/consent.html",
-        """<!doctype html><meta charset="utf-8"><h1>Согласие на обработку ПДн</h1><p>Открытие фиксируется.</p>"""
-    )
-    ensure(
-        "static/offer.html",
-        """<!doctype html><meta charset="utf-8"><h1>Публичная оферта</h1><p>Открытие фиксируется.</p>"""
-    )
+    # Автосоздание статических файлов
+    ensure("static/policy.html",
+           "<!doctype html><meta charset='utf-8'><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>")
+    ensure("static/consent.html",
+           "<!doctype html><meta charset='utf-8'><h1>Согласие на обработку ПДн</h1><p>Открытие фиксируется.</p>")
+    ensure("static/offer.html",
+           "<!doctype html><meta charset='utf-8'><h1>Публичная оферта</h1><p>Открытие фиксируется.</p>")
 
-    # 2) инициализируем БД (создаст/добавит недостающие колонки)
     init_db()
+    await set_webhook()
 
-    # 3) ставим вебхук
-    try:
-        webhook_url = f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}"
-        await bot.set_webhook(webhook_url)
-        me = await bot.get_me()
-        logger.info("Webhook set to %s for @%s (%s)", webhook_url, me.username, me.id)
-    except Exception as e:
-        logger.exception("Failed to set webhook: %s", e)
-
-    # 4) фон. цикл (если нужен; сейчас «пустой» таймер)
+    # (опционально) фоновые задачи
     async def loop():
         while True:
             await asyncio.sleep(3600)
