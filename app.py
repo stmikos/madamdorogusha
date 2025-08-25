@@ -464,15 +464,14 @@ async def startup():
            """<!doctype html><meta charset="utf-8"><h1>Публичная оферта</h1><p>Открытие фиксируется.</p>""")
 
     init_db()
-    await set_webhook()
 
-   try:
+    try:
         await bot.set_webhook(f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}")
         me = await bot.get_me()
         logger.info("Webhook set for @%s (%s)", me.username, me.id)
     except Exception as e:
         logger.exception("Failed to set webhook: %s", e)
-    # при необходимости – фон. цикл
+
     async def loop():
         while True:
             await asyncio.sleep(3600)
