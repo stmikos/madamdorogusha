@@ -466,13 +466,12 @@ async def startup():
     init_db()
     await set_webhook()
 
-    # Просто полезный лог — кто мы
-    try:
+   try:
+        await bot.set_webhook(f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}")
         me = await bot.get_me()
-        logger.info("Bot started as @%s (id=%s)", me.username, me.id)
+        logger.info("Webhook set for @%s (%s)", me.username, me.id)
     except Exception as e:
-        logger.warning("get_me failed: %s", e)
-
+        logger.exception("Failed to set webhook: %s", e)
     # при необходимости – фон. цикл
     async def loop():
         while True:
