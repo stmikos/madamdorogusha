@@ -286,27 +286,37 @@ async def on_docs(message: Message):
     await message.answer("Документы:", reply_markup=legal_keyboard(token))
 
 @dp.callback_query(F.data.startswith("legal_agree:"))
-async def on_legal_agree(cb: CallbackQuery):
+async def on_legal_agree(cb: CallbackQuery) -> None:
     token = cb.data.split(":", 1)[1]
+
+    # 1) читаем отметки
     with db() as con, con.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT tg_id, policy_viewed_at, consent_viewed_at, offer_viewed_at
-            FROM users WHERE policy_token=%s
-        """, (token,))
+            FROM users
+            WHERE policy_token=%s
+            """,
+            (token,),
+        )
         row = cur.fetchone()
+
     if not row:
         await cb.answer("Сессия не найдена. Нажмите /start", show_alert=True)
         return
-    if not (row.get("policy_viewed_at") and row.get("consent_viewed_at") and row.get("offer_viewed_at")):
-        await cb.answer("Откройте все три документа (Политика, Согласие, Оферта).", show_alert=True)
-        return
-    with db() as con, con.cursor() as cur:
-        cur.execute("UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
-                    (now_ts(), "legal_ok", row["tg_id"]))
-       inv_id = new_payment(row["tg_id"], PRICE_RUB)
-    url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
 
-    # ⬇️ Удаляем прошлое сообщение с оплатой, если было
+    if not (row.get("policy_viewed_at") and row.get("consent_viewed_at") and row.get("offer_viewed_at")):
+        await cb.answer("Пожалуйста, откройте все три документа (Политика, Согласие, Оферта).", show_alert=True)
+        return
+
+    # 2) фиксируем согласие
+    with db() as con, con.cursor() as cur:
+        cur.execute(
+            "UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
+            (now_ts(), "legal_ok", row["tg_id"]),
+        )
+
+    # 3) удаляем прошлую кнопку оплаты, если была
     u = get_user(row["tg_id"])
     old_id = (u or {}).get("last_pay_msg_id")
     if old_id:
@@ -315,7 +325,10 @@ async def on_legal_agree(cb: CallbackQuery):
         except Exception:
             pass
 
-    # ⬇️ Отправляем новое и сохраняем message_id
+    # 4) создаём новый счёт и присылаем свежую кнопку
+    inv_id = new_payment(row["tg_id"], PRICE_RUB)
+    url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
+
     m = await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
     upsert_user(row["tg_id"], last_pay_msg_id=m.message_id)
 
@@ -325,14 +338,28 @@ async def on_legal_agree(cb: CallbackQuery):
 @dp.message(Command("pay"))
 async def on_pay(message: Message):
     tg_id = message.from_user.id
+
     if not _legal_ok(tg_id):
+        # чистим старую кнопку оплаты
+        u = get_user(tg_id)
+        old_id = (u or {}).get("last_pay_msg_id")
+        if old_id:
+            try:
+                await bot.delete_message(chat_id=message.chat.id, message_id=old_id)
+            except Exception:
+                pass
+
         token = get_or_make_token(tg_id)
-        await message.answer("Сначала ознакомьтесь с документами и подтвердите согласие:", reply_markup=legal_keyboard(token))
+        await message.answer(
+            "Сначала ознакомьтесь с документами и подтвердите согласие:",
+            reply_markup=legal_keyboard(token),
+        )
         return
-       inv_id = new_payment(tg_id, PRICE_RUB)
+
+    inv_id = new_payment(tg_id, PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
 
-    # ⬇️ УДАЛЯЕМ прошлое сообщение с оплатой, если было
+    # чистим прошлую кнопку оплаты
     u = get_user(tg_id)
     old_id = (u or {}).get("last_pay_msg_id")
     if old_id:
@@ -341,7 +368,6 @@ async def on_pay(message: Message):
         except Exception:
             pass
 
-    # ⬇️ ОТПРАВЛЯЕМ новое и сохраняем его message_id
     m = await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
     upsert_user(tg_id, last_pay_msg_id=m.message_id)
 
