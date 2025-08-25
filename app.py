@@ -38,7 +38,7 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
 ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "")
 ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "")
 ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "")
-ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "MD5").upper()   # MD5|SHA256
+ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").upper()   # MD5|SHA256
 ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0")                     # "1" тест, "0" боевой
 
 PRICE_RUB = float(os.getenv("PRICE_RUB", "289"))
@@ -455,13 +455,7 @@ def ensure(path: str, content: str):
 
 @app.on_event("startup")
 async def startup():
-
-        await set_webhook()
-    me = await bot.get_me()
-    info = await bot.get_webhook_info()
-    logger.info("[webhook] set for @%s -> %s", me.username, info.url)
-
-    # автосоздание файлов документов
+    # Автосоздание файлов документов
     ensure("static/policy.html",
            """<!doctype html><meta charset="utf-8"><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>""")
     ensure("static/consent.html",
@@ -470,12 +464,16 @@ async def startup():
            """<!doctype html><meta charset="utf-8"><h1>Публичная оферта</h1><p>Открытие фиксируется.</p>""")
 
     init_db()
+    await set_webhook()
 
-    # вебхук
-    await bot.set_webhook(f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}")
-    
+    # Просто полезный лог — кто мы
+    try:
+        me = await bot.get_me()
+        logger.info("Bot started as @%s (id=%s)", me.username, me.id)
+    except Exception as e:
+        logger.warning("get_me failed: %s", e)
 
-    # простой фон. цикл (при необходимости — расширишь)
+    # при необходимости – фон. цикл
     async def loop():
         while True:
             await asyncio.sleep(3600)
