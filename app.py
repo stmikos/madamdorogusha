@@ -440,7 +440,6 @@ def pay_success():
 def pay_fail():
     return HTMLResponse("<h2>Оплата не завершена. Вы можете повторить попытку в боте.</h2>")
 
-# ===== Webhook & startup =====
 # ======= Документные страницы (фиксируют просмотр) =======
 def _read_html(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
@@ -482,7 +481,7 @@ def offer_with_token(token: str):
         logger.warning("offer update failed: %s", e)
     return HTMLResponse(_read_html("static/offer.html"))
 
-# Plain-страницы для ручной проверки (без фиксации)
+# Плоские страницы (без фиксации)
 @app.get("/policy", response_class=HTMLResponse)
 def policy_plain():
     return HTMLResponse(_read_html("static/policy.html"))
@@ -576,7 +575,7 @@ def ensure(path: str, content: str):
 # ======= Startup =======
 @app.on_event("startup")
 async def startup():
-    # Автосоздание статических файлов
+    # Создаём файлы документов, если их нет
     ensure("static/policy.html",
            "<!doctype html><meta charset='utf-8'><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>")
     ensure("static/consent.html",
@@ -587,7 +586,6 @@ async def startup():
     init_db()
     await set_webhook()
 
-    # (опционально) фоновые задачи
     async def loop():
         while True:
             await asyncio.sleep(3600)
