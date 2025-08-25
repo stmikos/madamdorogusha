@@ -455,6 +455,12 @@ def ensure(path: str, content: str):
 
 @app.on_event("startup")
 async def startup():
+
+        await set_webhook()
+    me = await bot.get_me()
+    info = await bot.get_webhook_info()
+    logger.info("[webhook] set for @%s -> %s", me.username, info.url)
+
     # автосоздание файлов документов
     ensure("static/policy.html",
            """<!doctype html><meta charset="utf-8"><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>""")
@@ -467,6 +473,7 @@ async def startup():
 
     # вебхук
     await bot.set_webhook(f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}")
+    
 
     # простой фон. цикл (при необходимости — расширишь)
     async def loop():
