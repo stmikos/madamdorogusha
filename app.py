@@ -453,8 +453,6 @@ def ensure(path: str, content: str):
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
 
-@app.on_event("startup")
-async def startup():
   @app.on_event("startup")
 async def startup():
     # 1) создаём статические файлы, если их нет
