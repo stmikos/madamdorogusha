@@ -55,11 +55,11 @@ ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "")
 ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "")
 ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "")
 ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").upper()  # MD5|SHA256
-ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "1")  # "1" тест, "0" боевой
+ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0")  # "1" тест, "0" боевой
 
 PRICE_RUB = float(os.getenv("PRICE_RUB", "289"))
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
-
+REMIND_3D_INTERVAL = int(os.getenv("REMIND_3D_INTERVAL", "3600"))  # проверка каждые N секунд
 if not BOT_TOKEN or not BASE_URL:
     raise RuntimeError("BOT_TOKEN и BASE_URL обязательны (BASE_URL без завершающего /).")
 if not DATABASE_URL:
@@ -217,6 +217,38 @@ def list_active_users():
         logger.error(f"list_active_users error: {e}")
         return []
 
+async def remind_expiring_users():
+    now = now_ts()
+    limit = now + timedelta(days=3)
+    try:
+        with db() as con, con.cursor() as cur:
+            cur.execute(
+                """
+                SELECT tg_id, valid_until
+                FROM users
+                WHERE status='active'
+                  AND valid_until BETWEEN %s AND %s
+                  AND remind_3d_sent=0
+                """,
+                (now, limit),
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        logger.error(f"remind_expiring_users fetch error: {e}")
+        return
+
+    for row in rows:
+        tg_id = row["tg_id"]
+        vu = row["valid_until"]
+        days_left = max(int((vu - now).total_seconds() // 86400), 0)
+        try:
+            await bot.send_message(
+                tg_id,
+                f"\u26a0\ufe0f Ваша подписка заканчивается {vu.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} (через {days_left} дн.). Продлите её, чтобы не потерять доступ.",
+            )
+            upsert_user(tg_id, remind_3d_sent=1)
+        except Exception as e:
+            logger.error(f"remind_expiring_users send error for {tg_id}: {e}")
 
 # ===== Robokassa =====
 def _sign(s: str) -> str:
@@ -559,5 +591,9 @@ async def startup():
 
     async def bg_loop():
         while True:
-            await asyncio.sleep(3600)
+            try:
+                await remind_expiring_users()
+            except Exception as e:
+                logger.error(f"remind_expiring_users error: {e}")
+            await asyncio.sleep(REMIND_3D_INTERVAL)
     asyncio.create_task(bg_loop())
