@@ -52,7 +52,7 @@ ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "")
 ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "")
 ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "")
 ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").upper()  # MD5 | SHA256
-ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "1")  # "1" тест, "0" боевой
+ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0")  # "1" тест, "0" боевой
 
 PRICE_RUB = float(os.getenv("PRICE_RUB", "289"))
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
@@ -221,7 +221,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "Culture": "ru",
         "Encoding": "utf-8",
         # В тестовом режиме обязательно IsTest=1
-        "IsTest": "1" if ROBOKASSA_TEST_MODE == "1" else "0",
+        "IsTest": "1" if ROBOKASSA_TEST_MODE == "0" else "0",
     }
     return "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
 
