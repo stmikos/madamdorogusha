@@ -25,9 +25,9 @@ services:
       - key: ROBOKASSA_PASSWORD2
         sync: false
       - key: ROBOKASSA_SIGNATURE_ALG
-        value: MD5
+        value: SHA256
       - key: ROBOKASSA_TEST_MODE
-        value: "1"
+        value: "0"
       - key: PRICE_RUB
         value: "289"
       - key: SUBSCRIPTION_DAYS
