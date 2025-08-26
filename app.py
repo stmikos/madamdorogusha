@@ -115,6 +115,15 @@ main_menu = ReplyKeyboardMarkup(
 
 # ===== DB helpers =====
 def db():
+    return psycopg.connect(
+        host=os.getenv("DB_HOST"),
+        port=int(os.getenv("DB_PORT", "6543")),
+        dbname=os.getenv("DB_NAME", "postgres"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        sslmode="require",
+        options=f"project={os.getenv('PROJECT_REF')}"  # важно для pooler'а
+    )
     # connect_timeout, чтобы быстро падать при сетевых проблемах
     return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
 
