@@ -34,3 +34,15 @@ services:
         value: "30"
       - key: DATABASE_URL
         sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "6543"
+      - key: DB_NAME
+        value: "postgres"
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: PROJECT_REF
+        sync: false
