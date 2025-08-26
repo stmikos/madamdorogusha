@@ -38,6 +38,9 @@ def _normalize_db_url(s: str | None) -> str | None:
     # частая ошибка: вставляют целую строку "DATABASE_URL=postgresql://..."
     if s.upper().startswith("DATABASE_URL="):
         s = s.split("=", 1)[1].strip()
+    if not re.search(r"[\?&]sslmode=", s, re.IGNORECASE):
+        sep = "&" if "?" in s else "?"
+        s = f"{s}{sep}sslmode=require"        
     return s
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -160,6 +163,7 @@ def init_db():
         logger.info("init_db: OK")
     except Exception as e:
         logger.error(f"init_db failed: {e}")
+        raise
 
 def get_user(tg_id: int):
     try:
