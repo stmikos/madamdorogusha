@@ -12,3 +12,4 @@
 
 ## Схема БД
 Таблицы `users`, `payments`, `logs` создаются автоматически при старте (init_db).
+`logs` хранит `id`, `created_at`, `tg_id`, `message` и индекс по `tg_id`.
