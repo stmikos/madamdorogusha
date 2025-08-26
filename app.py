@@ -109,27 +109,12 @@ main_menu = ReplyKeyboardMarkup(
 
 # ================= DB helpers =================
 def db():
-    """
-    Возвращает соединение psycopg. Работает:
-    1) с DATABASE_URL (URI), ИЛИ
-    2) с полями DB_* + options=project=... (для PgBouncer:6543).
-    """
-    if DATABASE_URL:
-                return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
-
-    if not DB_HOST:
-        raise RuntimeError("Нет DATABASE_URL и DB_HOST — не к чему подключаться")
-
-    opts = f"project={PROJECT_REF}" if PROJECT_REF else None
+    """Возвращает соединение psycopg по URI. Работает:
+    
     return psycopg.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        sslmode="require",
+        DATADASE_URL,
         row_factory=dict_row,
-        options=opts
+        connect_timeout=10,
     )
 
 
@@ -253,7 +238,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture": "ru",
         "Encoding": "utf-8",
-        "IsTest": "1" if ROBOKASSA_TEST_MODE != "0" else "0",
+        "IsTest": "1" if ROBOKASSA_TEST_MODE != "1" else "0",
     }
     url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
     logger.info(f"[RK DEBUG] {params}")
