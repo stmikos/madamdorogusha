@@ -36,6 +36,14 @@ log = logging.getLogger("app")
 # ============ env ============
 load_dotenv()
 
+def _normalize_db_url(s: str | None) -> str | None:
+    if not s:
+        return s
+    s = s.strip().strip('"').strip("'")
+    if s.upper().startswith("DATABASE_URL="):
+        s = s.split("=", 1)[1].strip()
+    return s
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 BASE_URL = os.getenv("BASE_URL", "").rstrip("/")
 # По твоим логам нужен секрет "Madamgorogusha" — сделаем его дефолтом,
