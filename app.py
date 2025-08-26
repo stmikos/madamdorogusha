@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 # ===== imports =====
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
@@ -63,23 +65,19 @@ os.makedirs("static", exist_ok=True)
 os.makedirs("assets", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def root():
     return HTMLResponse("<h3>OK: бот работает. Документы — по кнопкам в боте.</h3>")
 
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
 
 # ===== Aiogram (создаём ДО декораторов) =====
 if not BOT_TOKEN or not BASE_URL:
     logger.warning("⚠️ BOT_TOKEN и/или BASE_URL не заданы — проверь .env")
 bot = Bot(BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
-
 
 @dp.errors()
 async def on_aiogram_error(event: ErrorEvent):
@@ -93,7 +91,6 @@ async def on_aiogram_error(event: ErrorEvent):
         except Exception:
             pass
     return True
-
 
 WELCOME_IMAGE_PATH = "assets/welcome.png"
 EMAIL_RE = re.compile(r"^[A-Za-z0-9_.+\-]+@[A-Za-z0-9\-]+\.[A-Za-z0-9\.\-]+$")
@@ -117,13 +114,11 @@ def db():
         connect_timeout=10,
     )
 
-
 def now_ts():
     return datetime.now(timezone.utc)
 
-
 def init_db():
-    """Создаёт/мигрирует таблицы. НЕ роняет приложение при ошибке — только логирует."""
+    ""Создаёт/мигрирует таблицы. НЕ роняет приложение при ошибке — только логирует.""
     try:
         with db() as con, con.cursor() as cur:
             # users
@@ -169,7 +164,6 @@ def init_db():
     except Exception as e:
         logger.error(f"init_db failed: {e}")
 
-
 def get_user(tg_id: int):
     try:
         with db() as con, con.cursor() as cur:
@@ -178,7 +172,6 @@ def get_user(tg_id: int):
     except Exception as e:
         logger.error(f"get_user failed: {e}")
         return None
-
 
 def upsert_user(tg_id: int, **kwargs):
     try:
@@ -203,7 +196,6 @@ def upsert_user(tg_id: int, **kwargs):
     except Exception as e:
         logger.error(f"upsert_user failed: {e}")
 
-
 def list_active_users():
     try:
         with db() as con, con.cursor() as cur:
@@ -212,7 +204,6 @@ def list_active_users():
     except Exception as e:
         logger.error(f"list_active_users failed: {e}")
         return []
-
 
 # ================= Robokassa =================
 def _sign(s: str) -> str:
@@ -228,7 +219,6 @@ def sign_result(out_sum: float, inv_id: int) -> str:
     base = f"{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD2}"
     return _sign(base)
 
-
 def build_pay_url(inv_id: int, out_sum: float, description: str = "Подписка на 30 дней") -> str:
     params = {
         "MerchantLogin": ROBOKASSA_LOGIN,
@@ -243,7 +233,6 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
     url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
     logger.info(f"[RK DEBUG] {params}")
     return url
-
 
 def new_payment(tg_id: int, out_sum: float) -> int:
     with db() as con, con.cursor() as cur:
@@ -262,12 +251,10 @@ def set_payment_paid(inv_id: int):
         cur.execute("UPDATE payments SET status='paid', paid_at=%s WHERE inv_id=%s", (now_ts(), inv_id))
         con.commit()
 
-
 def pay_kb(url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💳 Оплатить {int(PRICE_RUB)} ₽ через Robokassa", url=url)]
     ])
-
 
 # ================= Документы =================
 def legal_keyboard(token: str) -> InlineKeyboardMarkup:
@@ -277,7 +264,6 @@ def legal_keyboard(token: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📑 Публичная оферта", url=f"{BASE_URL}/offer/{token}")],
         [InlineKeyboardButton(text="✔️ Я ознакомился(лась)", callback_data=f"legal_agree:{token}")],
     ])
-
 
 def get_or_make_token(tg_id: int) -> str:
     u = get_user(tg_id)
@@ -298,7 +284,6 @@ def _legal_ok(tg_id: int) -> bool:
         logger.error(f"_legal_ok failed: {e}")
         return False
 
-
 # ======= Bot handlers =======
 @dp.message(CommandStart())
 async def on_start(message: Message):
@@ -315,7 +300,6 @@ async def on_start(message: Message):
         await message.answer(txt, reply_markup=legal_keyboard(token))
     await message.answer("Меню ниже 👇", reply_markup=main_menu)
 
-
 @dp.message(Command("help"))
 async def on_help(message: Message):
     await message.answer(
@@ -326,13 +310,11 @@ async def on_help(message: Message):
         "/help — помощь"
     )
 
-
 @dp.message(F.text == "📄 Документы")
 @dp.message(Command("docs"))
 async def on_docs(message: Message):
     token = get_or_make_token(message.from_user.id)
     await message.answer("Документы:", reply_markup=legal_keyboard(token))
-
 
 @dp.callback_query(F.data.startswith("legal_agree:"))
 async def on_legal_agree(cb: CallbackQuery):
@@ -365,7 +347,6 @@ async def on_legal_agree(cb: CallbackQuery):
     await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
     await cb.answer()
 
-
 @dp.message(F.text == "💳 Оплатить подписку")
 @dp.message(Command("pay"))
 async def on_pay(message: Message):
@@ -388,11 +369,9 @@ async def on_pay(message: Message):
         logger.error(f"/pay failed: {e}")
         await message.answer("⚠️ Временно недоступно. Попробуйте позже.")
 
-
 def bar(progress: float, width: int = 20) -> str:
     filled = int(round(progress * width))
     return "▮" * filled + "▯" * (width - filled)
-
 
 @dp.message(F.text == "📊 Мой статус")
 @dp.message(Command("stats"))
@@ -425,17 +404,14 @@ async def on_stats(message: Message):
     )
     await message.answer(text, parse_mode="Markdown")
 
-
 @dp.message(F.text & ~F.text.regexp(r"^/"))
 async def on_text(message: Message):
     await message.answer("Напишите /help для списка команд.")
-
 
 # ======= Документные страницы (фиксируют просмотр) =======
 def _read_html(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
-
 
 @app.get("/policy/{token}", response_class=HTMLResponse)
 def policy_with_token(token: str):
@@ -447,7 +423,6 @@ def policy_with_token(token: str):
         logger.error(f"policy update failed: {e}")
     return HTMLResponse(_read_html("static/policy.html"))
 
-
 @app.get("/consent/{token}", response_class=HTMLResponse)
 def consent_with_token(token: str):
     try:
@@ -457,7 +432,6 @@ def consent_with_token(token: str):
     except Exception as e:
         logger.error(f"consent update failed: {e}")
     return HTMLResponse(_read_html("static/consent.html"))
-
 
 @app.get("/offer/{token}", response_class=HTMLResponse)
 def offer_with_token(token: str):
@@ -469,12 +443,10 @@ def offer_with_token(token: str):
         logger.error(f"offer update failed: {e}")
     return HTMLResponse(_read_html("static/offer.html"))
 
-
 # Plain-страницы для ручной проверки (без фиксации)
 @app.get("/policy", response_class=HTMLResponse)
 def policy_plain():
     return HTMLResponse(_read_html("static/policy.html"))
-
 
 @app.get("/consent", response_class=HTMLResponse)
 def consent_plain():
@@ -485,17 +457,14 @@ def consent_plain():
 def offer_plain():
     return HTMLResponse(_read_html("static/offer.html"))
 
-
 # ======= Robokassa callbacks =======
 class RobokassaResult(BaseModel):
     OutSum: float
     InvId: int
     SignatureValue: str
 
-
 def _eq_ci(a: str, b: str) -> bool:
     return (a or "").lower() == (b or "").lower()
-
 
 @app.post("/pay/result")
 async def pay_result(request: Request):
@@ -546,7 +515,6 @@ async def pay_result(request: Request):
 
     return PlainTextResponse(f"OK{inv_id}")
 
-
 @app.get("/pay/success")
 def pay_success():
     return HTMLResponse("<h2>Спасибо! Оплата прошла. Вернитесь в Telegram — приглашение уже ждёт вас в боте.</h2>")
@@ -555,7 +523,6 @@ def pay_success():
 @app.get("/pay/fail")
 def pay_fail():
     return HTMLResponse("<h2>Оплата не завершена. Вы можете повторить попытку в боте.</h2>")
-
 
 # ======= Webhook & startup =======
 @app.post(f"/telegram/webhook/{WEBHOOK_SECRET}")
@@ -577,12 +544,10 @@ async def set_webhook():
         return
     await bot.set_webhook(f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}")
 
-
 def ensure(path: str, content: str):
     if not os.path.exists(path):
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-
 
 @app.on_event("startup")
 async def startup():
