@@ -1,8 +1,13 @@
-# ===== imports =====
-import os, re, asyncio, logging, secrets
+# -*- coding: utf-8 -*-
+# TG subscription bot + Robokassa + FastAPI (webhook)
+import os
+import re
+import asyncio
+import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import md5, sha256
-from urllib.parse import urlencode, quote_plus
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -11,7 +16,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, CallbackQuery, Update,
     InlineKeyboardMarkup, InlineKeyboardButton,
@@ -22,34 +27,43 @@ from aiogram.types import (
 import psycopg
 from psycopg.rows import dict_row
 
-# ===== logging =====
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("app")
 
-# ===== env =====
+# ============ logging ============
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("app")
+
+
+# ============ env ============
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 BASE_URL = os.getenv("BASE_URL", "").rstrip("/")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", secrets.token_urlsafe(16))
-DATABASE_URL = os.getenv("DATABASE_URL")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
+# По твоим логам нужен секрет "Madamgorogusha" — сделаем его дефолтом,
+# но лучше задать явно переменной WEBHOOK_SECRET в Render.
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "Madamgorogusha")
+
+# ВАЖНО: в DATABASE_URL пароль со слешем ДОЛЖЕН быть url-encoded ("/" => "%2F")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0") or 0)  # id закрытого канала
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
 
 ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "")
 ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "")
 ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "")
-ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").upper()   # MD5|SHA256
-ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0")                     # "1" тест, "0" боевой
+ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").upper()  # MD5 | SHA256
+ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "1")  # "1" тест, "0" боевой
 
 PRICE_RUB = float(os.getenv("PRICE_RUB", "289"))
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
 
 if not BOT_TOKEN or not BASE_URL:
-    raise RuntimeError("BOT_TOKEN и BASE_URL обязательны (BASE_URL без завершающего /).")
+    raise RuntimeError("Переменные окружения BOT_TOKEN и BASE_URL обязательны (BASE_URL без завершающего /).")
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL обязателен (?sslmode=require).")
+    raise RuntimeError("Переменная окружения DATABASE_URL обязательна и должна содержать ?sslmode=require.")
 
-# ===== FastAPI & static =====
+
+# ============ FastAPI & static ============
 app = FastAPI(title="TG Sub Bot")
 os.makedirs("static", exist_ok=True)
 os.makedirs("assets", exist_ok=True)
@@ -60,26 +74,52 @@ def root():
     return HTMLResponse("<h3>OK: бот работает. Документы — по кнопкам в боте.</h3>")
 
 @app.get("/health")
-def health(): return {"status": "ok"}
+def health():
+    return {"status": "ok"}
 
-# ===== Aiogram (должно быть до любых @dp.*) =====
+@app.get("/db-check")
+def db_check():
+    try:
+        with psycopg.connect(DATABASE_URL) as con, con.cursor() as cur:
+            cur.execute("SELECT 1")
+            x = cur.fetchone()
+        return {"ok": True, "result": x[0]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ============ Aiogram (создаём ДО декораторов) ============
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
 @dp.errors()
-async def on_aiogram_error(event: ErrorEvent):
-    logger.exception("Aiogram handler error", exc_info=event.exception)
+async def aiogram_errors(event: ErrorEvent):
+    log.exception("Aiogram handler error", exc_info=event.exception)
     if ADMIN_USER_ID:
         try:
-            await bot.send_message(
-                ADMIN_USER_ID,
-                f"⚠️ Ошибка: {type(event.exception).__name__}\n{event.exception}"
-            )
+            await bot.send_message(ADMIN_USER_ID, f"⚠️ Ошибка: {type(event.exception).__name__}\n{event.exception}")
         except Exception:
             pass
     return True
 
-# ===== DB =====
+
+# ============ UI ============
+
+WELCOME_IMAGE_PATH = "assets/welcome.png"
+EMAIL_RE = re.compile(r"^[A-Za-z0-9_.+\-]+@[A-Za-z0-9\-]+\.[A-Za-z0-9\.\-]+$")
+
+main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💳 Оплатить подписку")],
+        [KeyboardButton(text="📄 Документы")],
+        [KeyboardButton(text="📊 Мой статус")],
+    ],
+    resize_keyboard=True
+)
+
+
+# ============ DB helpers ============
+
 def db():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
@@ -88,7 +128,7 @@ def now_ts():
 
 def init_db():
     with db() as con, con.cursor() as cur:
-        # базовая таблица
+        # users
         cur.execute("""
         CREATE TABLE IF NOT EXISTS users(
             tg_id BIGINT PRIMARY KEY,
@@ -96,7 +136,7 @@ def init_db():
             updated_at TIMESTAMPTZ
         );
         """)
-        # гарантируем поля
+        # гарантируем нужные колонки
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new';")
@@ -108,9 +148,10 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_invoice_id BIGINT;")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS remind_3d_sent INT DEFAULT 0;")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);")
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_pay_msg_id BIGINT;")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);")
 
+        # payments
         cur.execute("""
         CREATE TABLE IF NOT EXISTS payments(
             inv_id BIGSERIAL PRIMARY KEY,
@@ -124,6 +165,7 @@ def init_db():
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);")
         con.commit()
+
 
 def get_user(tg_id: int):
     with db() as con, con.cursor() as cur:
@@ -150,54 +192,38 @@ def upsert_user(tg_id: int, **kwargs):
             with db() as con, con.cursor() as cur:
                 cur.execute("UPDATE users SET updated_at=%s WHERE tg_id=%s", (now_ts(), tg_id))
 
-def list_active_users():
-    with db() as con, con.cursor() as cur:
-        cur.execute("SELECT tg_id, valid_until, remind_3d_sent FROM users WHERE status='active' AND valid_until IS NOT NULL")
-        return cur.fetchall()
 
-# ===== Robokassa =====
-from decimal import Decimal, ROUND_HALF_UP
-from urllib.parse import urlencode, quote_plus
+# ============ Robokassa ============
 
-def _fmt_amount(val: float | Decimal) -> str:
-    # фиксируем формат суммы: две цифры после запятой, точка как разделитель
-    d = Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    return f"{d:.2f}"
-
-def _sign(s: str) -> str:
-    return sha256(s.encode("utf-8")).hexdigest() if ROBOKASSA_SIGNATURE_ALG == "SHA256" else md5(s.encode("utf-8")).hexdigest()
+def _sign_base(s: str) -> str:
+    if ROBOKASSA_SIGNATURE_ALG == "SHA256":
+        return sha256(s.encode("utf-8")).hexdigest()
+    return md5(s.encode("utf-8")).hexdigest()
 
 def sign_success(out_sum: float, inv_id: int) -> str:
-    # ВАЖНО: подпись для формы оплаты считается по Login:OutSum:InvId:Password1
-    out_sum_str = _fmt_amount(out_sum)
-    base = f"{ROBOKASSA_LOGIN}:{out_sum_str}:{inv_id}:{ROBOKASSA_PASSWORD1}"
-    return _sign(base)
+    # Для ссылки оплаты
+    base = f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD1}"
+    return _sign_base(base)
 
 def sign_result(out_sum: float, inv_id: int) -> str:
-    # Подпись для RESULT URL: OutSum:InvId:Password2
-    out_sum_str = _fmt_amount(out_sum)
-    base = f"{out_sum_str}:{inv_id}:{ROBOKASSA_PASSWORD2}"
-    return _sign(base)
+    # Для callback /pay/result
+    base = f"{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD2}"
+    return _sign_base(base)
 
 def build_pay_url(inv_id: int, out_sum: float, description: str = "Подписка на 30 дней") -> str:
-    out_sum_str = _fmt_amount(out_sum)
+    # НЕЛЬЗЯ предварительно кодировать Description вручную — иначе будет двойное кодирование и ошибка 29.
     params = {
         "MerchantLogin": ROBOKASSA_LOGIN,
-        "OutSum": out_sum_str,
+        "OutSum": f"{out_sum:.2f}",
         "InvId": str(inv_id),
-        "Description": quote_plus(description),  # безопасно кодируем
+        "Description": description,
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture": "ru",
         "Encoding": "utf-8",
+        # В тестовом режиме обязательно IsTest=1
+        "IsTest": "1" if ROBOKASSA_TEST_MODE == "1" else "0",
     }
-    # В ТЕСТЕ обязательно указывать IsTest=1
-    if str(ROBOKASSA_TEST_MODE).strip() == "1":
-        params["IsTest"] = "1"
-
-    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
-    # для отладки можно временно залогировать:
-    print("[RK DEBUG]", params)
-    return url
+    return "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
 
 def new_payment(tg_id: int, out_sum: float) -> int:
     with db() as con, con.cursor() as cur:
@@ -218,18 +244,8 @@ def pay_kb(url: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=f"💳 Оплатить {int(PRICE_RUB)} ₽ через Robokassa", url=url)]
     ])
 
-# ===== Документы =====
-WELCOME_IMAGE_PATH = "assets/welcome.png"
-EMAIL_RE = re.compile(r"^[A-Za-z0-9_.+\-]+@[A-Za-z0-9\-]+\.[A-Za-z0-9\.\-]+$")
 
-main_menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="💳 Оплатить подписку")],
-        [KeyboardButton(text="📄 Документы")],
-        [KeyboardButton(text="📊 Мой статус")],
-    ],
-    resize_keyboard=True
-)
+# ============ Документы ============
 
 def legal_keyboard(token: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -253,7 +269,9 @@ def _legal_ok(tg_id: int) -> bool:
         r = cur.fetchone()
     return bool(r and r.get("legal_confirmed_at"))
 
-# ===== Handlers =====
+
+# ============ Bot handlers ============
+
 @dp.message(CommandStart())
 async def on_start(message: Message):
     tg_id = message.from_user.id
@@ -265,7 +283,11 @@ async def on_start(message: Message):
         "3) Затем оплатите подписку"
     )
     try:
-        await message.answer_photo(FSInputFile(WELCOME_IMAGE_PATH), caption=txt, reply_markup=legal_keyboard(token))
+        await message.answer_photo(
+            FSInputFile(WELCOME_IMAGE_PATH),
+            caption=txt,
+            reply_markup=legal_keyboard(token)
+        )
     except Exception:
         await message.answer(txt, reply_markup=legal_keyboard(token))
     await message.answer("Меню ниже 👇", reply_markup=main_menu)
@@ -287,19 +309,13 @@ async def on_docs(message: Message):
     await message.answer("Документы:", reply_markup=legal_keyboard(token))
 
 @dp.callback_query(F.data.startswith("legal_agree:"))
-async def on_legal_agree(cb: CallbackQuery) -> None:
+async def on_legal_agree(cb: CallbackQuery):
     token = cb.data.split(":", 1)[1]
-
-    # 1) читаем отметки
     with db() as con, con.cursor() as cur:
-        cur.execute(
-            """
+        cur.execute("""
             SELECT tg_id, policy_viewed_at, consent_viewed_at, offer_viewed_at
-            FROM users
-            WHERE policy_token=%s
-            """,
-            (token,),
-        )
+            FROM users WHERE policy_token=%s
+        """, (token,))
         row = cur.fetchone()
 
     if not row:
@@ -310,59 +326,47 @@ async def on_legal_agree(cb: CallbackQuery) -> None:
         await cb.answer("Пожалуйста, откройте все три документа (Политика, Согласие, Оферта).", show_alert=True)
         return
 
-    # 2) фиксируем согласие
     with db() as con, con.cursor() as cur:
-        cur.execute(
-            "UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
-            (now_ts(), "legal_ok", row["tg_id"]),
-        )
+        cur.execute("UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
+                    (now_ts(), "legal_ok", row["tg_id"]))
 
-    # 3) удаляем прошлую кнопку оплаты, если была
-    u = get_user(row["tg_id"])
-    old_id = (u or {}).get("last_pay_msg_id")
-    if old_id:
-        try:
-            await bot.delete_message(chat_id=cb.message.chat.id, message_id=old_id)
-        except Exception:
-            pass
-
-    # 4) создаём новый счёт и присылаем свежую кнопку
     inv_id = new_payment(row["tg_id"], PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
 
+    # если ранее отправляли кнопку оплаты, удалим её чтобы не плодились
+    u = get_user(row["tg_id"])
+    old_msg_id = (u or {}).get("last_pay_msg_id")
+    if old_msg_id:
+        try:
+            await bot.delete_message(chat_id=row["tg_id"], message_id=old_msg_id)
+        except Exception:
+            pass
+
     m = await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
     upsert_user(row["tg_id"], last_pay_msg_id=m.message_id)
-
     await cb.answer()
+
 @dp.message(F.text == "💳 Оплатить подписку")
 @dp.message(Command("pay"))
 async def on_pay(message: Message):
     tg_id = message.from_user.id
-
-    # 1) проверяем согласие
     if not _legal_ok(tg_id):
         token = get_or_make_token(tg_id)
-        await message.answer(
-            "Сначала ознакомьтесь с документами и подтвердите согласие:",
-            reply_markup=legal_keyboard(token)
-        )
+        await message.answer("Сначала ознакомьтесь с документами и подтвердите согласие:", reply_markup=legal_keyboard(token))
         return
+    inv_id = new_payment(tg_id, PRICE_RUB)
+    url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
 
-    # 2) удаляем предыдущее сообщение-оплату, если было
-    row = get_user(tg_id) or {}
-    prev_id = row.get("last_pay_msg_id")
-    if prev_id:
+    # Сносим старую кнопку оплаты, если была
+    u = get_user(tg_id)
+    old_msg_id = (u or {}).get("last_pay_msg_id")
+    if old_msg_id:
         try:
-            await bot.delete_message(chat_id=message.chat.id, message_id=prev_id)
+            await bot.delete_message(chat_id=message.chat.id, message_id=old_msg_id)
         except Exception:
             pass
 
-    # 3) создаём новый счёт и отправляем кнопку
-    inv_id = new_payment(tg_id, PRICE_RUB)
-    url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
     m = await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
-
-    # 4) запоминаем id этого сообщения, чтобы в следующий раз удалить
     upsert_user(tg_id, last_pay_msg_id=m.message_id)
 
 def bar(progress: float, width: int = 20) -> str:
@@ -398,60 +402,68 @@ async def on_stats(message: Message):
     )
     await message.answer(text, parse_mode="Markdown")
 
+# Не перехватываем команды
 @dp.message(F.text & ~F.text.regexp(r"^/"))
 async def on_text(message: Message):
     await message.answer("Напишите /help для списка команд.")
 
-# ===== Документные страницы (фиксируют просмотр) =====
+
+# ============ Документные HTTP-страницы (фиксируют просмотр) ============
+
 def _read_html(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
 @app.get("/policy/{token}", response_class=HTMLResponse)
 def policy_with_token(token: str):
-    logger.info(f"[DOC] policy open token={token}")
     try:
         with db() as con, con.cursor() as cur:
             cur.execute("UPDATE users SET policy_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
     except Exception as e:
-        logger.warning("policy update failed: %s", e)
+        log.warning("policy update failed: %s", e)
     return HTMLResponse(_read_html("static/policy.html"))
 
 @app.get("/consent/{token}", response_class=HTMLResponse)
 def consent_with_token(token: str):
-    logger.info(f"[DOC] consent open token={token}")
     try:
         with db() as con, con.cursor() as cur:
             cur.execute("UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
     except Exception as e:
-        logger.warning("consent update failed: %s", e)
+        log.warning("consent update failed: %s", e)
     return HTMLResponse(_read_html("static/consent.html"))
 
 @app.get("/offer/{token}", response_class=HTMLResponse)
 def offer_with_token(token: str):
-    logger.info(f"[DOC] offer open token={token}")
     try:
         with db() as con, con.cursor() as cur:
             cur.execute("UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
     except Exception as e:
-        logger.warning("offer update failed: %s", e)
+        log.warning("offer update failed: %s", e)
     return HTMLResponse(_read_html("static/offer.html"))
 
-# plain-страницы для ручной проверки (без фиксации)
+# Плэйн-страницы для ручной проверки (без фиксации)
 @app.get("/policy", response_class=HTMLResponse)
-def policy_plain():  return HTMLResponse(_read_html("static/policy.html"))
-@app.get("/consent", response_class=HTMLResponse)
-def consent_plain(): return HTMLResponse(_read_html("static/consent.html"))
-@app.get("/offer", response_class=HTMLResponse)
-def offer_plain():   return HTMLResponse(_read_html("static/offer.html"))
+def policy_plain():
+    return HTMLResponse(_read_html("static/policy.html"))
 
-# ===== Robokassa callbacks =====
+@app.get("/consent", response_class=HTMLResponse)
+def consent_plain():
+    return HTMLResponse(_read_html("static/consent.html"))
+
+@app.get("/offer", response_class=HTMLResponse)
+def offer_plain():
+    return HTMLResponse(_read_html("static/offer.html"))
+
+
+# ============ Robokassa callbacks ============
+
 class RobokassaResult(BaseModel):
     OutSum: float
     InvId: int
     SignatureValue: str
 
-def _eq_ci(a: str, b: str) -> bool: return (a or "").lower() == (b or "").lower()
+def _eq_ci(a: str, b: str) -> bool:
+    return (a or "").lower() == (b or "").lower()
 
 @app.post("/pay/result")
 async def pay_result(request: Request):
@@ -470,13 +482,15 @@ async def pay_result(request: Request):
         raise HTTPException(403, "Invalid signature")
 
     set_payment_paid(inv_id)
+
     with db() as con, con.cursor() as cur:
         cur.execute("SELECT tg_id FROM payments WHERE inv_id=%s", (inv_id,))
         row = cur.fetchone()
+
     if not row:
         return PlainTextResponse(f"OK{inv_id}")
-    tg_id = row["tg_id"]
 
+    tg_id = row["tg_id"]
     valid_until = now_ts() + timedelta(days=SUBSCRIPTION_DAYS)
     upsert_user(tg_id, status="active", valid_until=valid_until, remind_3d_sent=0)
 
@@ -503,123 +517,9 @@ def pay_success():
 def pay_fail():
     return HTMLResponse("<h2>Оплата не завершена. Вы можете повторить попытку в боте.</h2>")
 
-# ======= Документные страницы (фиксируют просмотр) =======
-def _read_html(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
 
-@app.get("/policy/{token}", response_class=HTMLResponse)
-def policy_with_token(token: str):
-    try:
-        with db() as con, con.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET policy_viewed_at=%s WHERE policy_token=%s",
-                (now_ts(), token)
-            )
-    except Exception as e:
-        logger.warning("policy update failed: %s", e)
-    return HTMLResponse(_read_html("static/policy.html"))
+# ============ Webhook & startup ============
 
-@app.get("/consent/{token}", response_class=HTMLResponse)
-def consent_with_token(token: str):
-    try:
-        with db() as con, con.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s",
-                (now_ts(), token)
-            )
-    except Exception as e:
-        logger.warning("consent update failed: %s", e)
-    return HTMLResponse(_read_html("static/consent.html"))
-
-@app.get("/offer/{token}", response_class=HTMLResponse)
-def offer_with_token(token: str):
-    try:
-        with db() as con, con.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s",
-                (now_ts(), token)
-            )
-    except Exception as e:
-        logger.warning("offer update failed: %s", e)
-    return HTMLResponse(_read_html("static/offer.html"))
-
-# Плоские страницы (без фиксации)
-@app.get("/policy", response_class=HTMLResponse)
-def policy_plain():
-    return HTMLResponse(_read_html("static/policy.html"))
-
-@app.get("/consent", response_class=HTMLResponse)
-def consent_plain():
-    return HTMLResponse(_read_html("static/consent.html"))
-
-@app.get("/offer", response_class=HTMLResponse)
-def offer_plain():
-    return HTMLResponse(_read_html("static/offer.html"))
-
-# ======= Robokassa callbacks =======
-class RobokassaResult(BaseModel):
-    OutSum: float
-    InvId: int
-    SignatureValue: str
-
-def _eq_ci(a: str, b: str) -> bool:
-    return (a or "").lower() == (b or "").lower()
-
-@app.post("/pay/result")
-async def pay_result(request: Request):
-    data = dict(await request.form())
-    try:
-        out_sum = float(data.get("OutSum"))
-        inv_id = int(data.get("InvId"))
-        sig = data.get("SignatureValue")
-    except Exception:
-        raise HTTPException(400, "Bad payload")
-
-    expected = sign_result(out_sum, inv_id)
-    if not _eq_ci(sig, expected):
-        with db() as con, con.cursor() as cur:
-            cur.execute("UPDATE payments SET status='failed' WHERE inv_id=%s", (inv_id,))
-        raise HTTPException(403, "Invalid signature")
-
-    set_payment_paid(inv_id)
-    with db() as con, con.cursor() as cur:
-        cur.execute("SELECT tg_id FROM payments WHERE inv_id=%s", (inv_id,))
-        row = cur.fetchone()
-    if not row:
-        return PlainTextResponse(f"OK{inv_id}")
-    tg_id = row["tg_id"]
-
-    valid_until = now_ts() + timedelta(days=SUBSCRIPTION_DAYS)
-    upsert_user(tg_id, status="active", valid_until=valid_until, remind_3d_sent=0)
-
-    try:
-        expire_at = now_ts() + timedelta(days=2)
-        link = await bot.create_chat_invite_link(
-            chat_id=CHANNEL_ID,
-            name=f"Sub {tg_id} {inv_id}",
-            expire_date=int(expire_at.timestamp()),
-            member_limit=1
-        )
-        await bot.send_message(
-            tg_id,
-            f"Оплата получена ✅\nВаша ссылка в закрытый канал:\n{link.invite_link}"
-        )
-    except Exception as e:
-        if ADMIN_USER_ID:
-            await bot.send_message(ADMIN_USER_ID, f"Не удалось создать инвайт: {e}")
-
-    return PlainTextResponse(f"OK{inv_id}")
-
-@app.get("/pay/success")
-def pay_success():
-    return HTMLResponse("<h2>Спасибо! Оплата прошла. Вернитесь в Telegram — приглашение уже ждёт вас в боте.</h2>")
-
-@app.get("/pay/fail")
-def pay_fail():
-    return HTMLResponse("<h2>Оплата не завершена. Вы можете повторить попытку в боте.</h2>")
-
-# ======= Webhook =======
 @app.post(f"/telegram/webhook/{WEBHOOK_SECRET}")
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -635,10 +535,9 @@ def ensure(path: str, content: str):
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
 
-# ======= Startup =======
 @app.on_event("startup")
 async def startup():
-    # Создаём файлы документов, если их нет
+    # Автосоздание файлов документов
     ensure("static/policy.html",
            "<!doctype html><meta charset='utf-8'><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>")
     ensure("static/consent.html",
@@ -646,9 +545,18 @@ async def startup():
     ensure("static/offer.html",
            "<!doctype html><meta charset='utf-8'><h1>Публичная оферта</h1><p>Открытие фиксируется.</p>")
 
-    init_db()
-    await set_webhook()
+    # Инициализация БД: не падаем, если временно недоступна — просто лог
+    try:
+        init_db()
+    except Exception as e:
+        log.error("init_db failed: %s", e)
 
+    try:
+        await set_webhook()
+    except Exception as e:
+        log.error("set_webhook failed: %s", e)
+
+    # фоновая задача-пустышка, чтобы пример был завершённый
     async def loop():
         while True:
             await asyncio.sleep(3600)
