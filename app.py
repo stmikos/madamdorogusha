@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-
+import logging
+from textwrap import dedent
+import psycopg
+from psycopg.rows import dict_row
 # ===== imports =====
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
@@ -106,63 +109,73 @@ main_menu = ReplyKeyboardMarkup(
 
 # ================= DB helpers =================
 def db():
-    """Возвращает соединение psycopg по URI. Работает:
-    
-    return psycopg.connect(
-        DATADASE_URL,
-        row_factory=dict_row,
-        connect_timeout=10,
-    )
+"""Подключение к БД через DSN-строку.Работает и с Supabase pooler: 6543 + options=project=REF."""
+    host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
+    port = os.getenv("DB_PORT") or "6543"
+    name = os.getenv("DB_NAME") or "postgres"
+    user = os.getenv("DB_USER")  # напр.: postgres.xxxxx
+    pwd  = os.getenv("DB_PASSWORD")
+    project_ref = os.getenv("PROJECT_REF")  # напр.: ajcommzzdmzpyzzqclgb
 
-def now_ts():
-    return datetime.now(timezone.utc)
+    if not (user and pwd):
+        raise RuntimeError("DB_USER/DB_PASSWORD не заданы в переменных окружения.")
+
+    dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
+    if project_ref:
+        dsn += f" options=project={project_ref}"
+
+    return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
 
 def init_db():
-    ""Создаёт/мигрирует таблицы. НЕ роняет приложение при ошибке — только логирует.""
+
+def init_db():
+    """
+    Создает/мигрирует таблицы. При ошибке — только логирует, приложение не падает.
+    ВАЖНО: весь SQL в тройных кавычках, иначе Python увидит CREATE как код.
+    """
     try:
         with db() as con, con.cursor() as cur:
             # users
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS users(
-                tg_id BIGINT PRIMARY KEY,
-                created_at TIMESTAMPTZ,
-                updated_at TIMESTAMPTZ
-            );
-            """)
-            for col, default in [
-                ("email TEXT", None),
-                ("phone TEXT", None),
-                ("status TEXT DEFAULT 'new'", None),
-                ("policy_token TEXT", None),
-                ("policy_viewed_at TIMESTAMPTZ", None),
-                ("consent_viewed_at TIMESTAMPTZ", None),
-                ("offer_viewed_at TIMESTAMPTZ", None),
-                ("legal_confirmed_at TIMESTAMPTZ", None),
-                ("valid_until TIMESTAMPTZ", None),
-                ("last_invoice_id BIGINT", None),
-                ("remind_3d_sent INT DEFAULT 0", None),
-            ]:
-                cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col};")
+            cur.execute(dedent("""
+                CREATE TABLE IF NOT EXISTS users (
+                    tg_id BIGINT PRIMARY KEY,
+                    created_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ
+                );
+            """))
 
+            # безопасные миграции полей
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new';")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_token TEXT;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_viewed_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_viewed_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS offer_viewed_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS legal_confirmed_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_invoice_id BIGINT;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS remind_3d_sent INT DEFAULT 0;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_pay_msg_id BIGINT;")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);")
 
             # payments
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS payments(
-                inv_id BIGSERIAL PRIMARY KEY,
-                tg_id BIGINT,
-                out_sum NUMERIC(12,2),
-                status TEXT,                 -- created|paid|failed
-                created_at TIMESTAMPTZ,
-                paid_at TIMESTAMPTZ,
-                signature TEXT
-            );
-            """)
+            cur.execute(dedent("""
+                CREATE TABLE IF NOT EXISTS payments (
+                    inv_id BIGSERIAL PRIMARY KEY,
+                    tg_id BIGINT,
+                    out_sum NUMERIC(12,2),
+                    status TEXT,
+                    created_at TIMESTAMPTZ,
+                    paid_at TIMESTAMPTZ,
+                    signature TEXT
+                );
+            """))
             cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);")
+
             con.commit()
-        logger.info("DB: init ok")
     except Exception as e:
-        logger.error(f"init_db failed: {e}")
+        logger.error("init_db failed: %s", e)
 
 def get_user(tg_id: int):
     try:
@@ -551,6 +564,11 @@ def ensure(path: str, content: str):
 
 @app.on_event("startup")
 async def startup():
+    try:
+        init_db()
+    except Exception as e:
+        logger.error("startup init_db error: %s", e)
+    
     # Автосоздание файлов документов
     ensure("static/policy.html",
            """<!doctype html><meta charset="utf-8"><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>""")
