@@ -159,6 +159,17 @@ def init_db():
             );
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);")
+            
+            # logs
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS logs(
+                id BIGSERIAL PRIMARY KEY,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                tg_id BIGINT NOT NULL,
+                message TEXT NOT NULL
+            );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_tg_id ON logs(tg_id);")
             con.commit()
         logger.info("init_db: OK")
     except Exception as e:
