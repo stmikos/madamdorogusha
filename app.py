@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
 from textwrap import dedent
-import psycopg2
 from psycopg.rows import dict_row
 # ===== imports =====
 import os, re, asyncio, logging, secrets
