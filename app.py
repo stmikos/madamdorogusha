@@ -110,24 +110,7 @@ main_menu = ReplyKeyboardMarkup(
 
 # ================= DB helpers =================
 def db():
-    #Connect to Postgres via Supabase PgBouncer (port 6543).Works with options=project=<PROJECT_REF>.
-    host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
-    port = os.getenv("DB_PORT") or "6543"
-    name = os.getenv("DB_NAME") or "postgres"
-    user = os.getenv("DB_USER")  # напр.: postgres.xxxxx
-    pwd  = os.getenv("DB_PASSWORD")
-    project_ref = os.getenv("PROJECT_REF")  # напр.: ajcommzzdmzpyzzqclgb
 
-    if not (user and pwd):
-        raise RuntimeError("DB_USER/DB_PASSWORD не заданы в переменных окружения.")
-
-    dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
-    if project_ref:
-        dsn += f" options=project={project_ref}"
-
-    return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
-
-def db():
     host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
     port = os.getenv("DB_PORT") or "6543"
     name = os.getenv("DB_NAME") or "postgres"
@@ -145,8 +128,10 @@ def db():
 
     return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
 
+
 def init_db():
-      try:
+
+    try:
         with db() as con, con.cursor() as cur:
             # users
             cur.execute(dedent("""
