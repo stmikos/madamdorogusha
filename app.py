@@ -126,13 +126,28 @@ def db():
 
     return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
 
-def init_db():
+def db():
+    """Подключение к БД через DSN-строку. Работает и с Supabase pooler: порт 6543 + options=project=REF."""
+    host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
+    port = os.getenv("DB_PORT") or "6543"
+    name = os.getenv("DB_NAME") or "postgres"
+    user = os.getenv("DB_USER")            # напр.: postgres.ajcommzzdmzpyzzqclgb
+    pwd  = os.getenv("DB_PASSWORD")        # твой пароль
+    project_ref = os.getenv("PROJECT_REF") # напр.: ajcommzzdmzpyzzqclgb
+
+    if not (user and pwd):
+        raise RuntimeError("DB_USER/DB_PASSWORD не заданы в переменных окружения.")
+
+    # ВАЖНО: для pgbouncer используем options=project=REF и sslmode=require
+    dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
+    if project_ref:
+        dsn += f" options=project={project_ref}"
+
+    return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
+
 
 def init_db():
-    """
-    Создает/мигрирует таблицы. При ошибке — только логирует, приложение не падает.
-    ВАЖНО: весь SQL в тройных кавычках, иначе Python увидит CREATE как код.
-    """
+    """Создает/мигрирует таблицы. При ошибке логирует и продолжает работу приложения."""
     try:
         with db() as con, con.cursor() as cur:
             # users
@@ -144,7 +159,7 @@ def init_db():
                 );
             """))
 
-            # безопасные миграции полей
+            # добавляем недостающие колонки (безопасно, если уже есть)
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;")
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;")
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new';")
