@@ -13,7 +13,6 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
-import os
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
@@ -25,7 +24,6 @@ from aiogram.types import (
 )
 
 import psycopg
-from psycopg.rows import dict_row
 
 # ===== logging =====
 logging.basicConfig(level=logging.INFO)
@@ -81,6 +79,7 @@ if not BOT_TOKEN or not BASE_URL:
     logger.warning("⚠️ BOT_TOKEN и/или BASE_URL не заданы — проверь .env")
 bot = Bot(BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
+loop_task: asyncio.Task | None = None
 
 @dp.errors()
 async def on_aiogram_error(event: ErrorEvent):
@@ -108,10 +107,13 @@ main_menu = ReplyKeyboardMarkup(
 )
 
 # ================= DB helpers =================
+def now_ts() -> datetime:
+    return datetime.now(timezone.utc)
+
 def db():
 
     host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
-    port = os.getenv("DB_PORT") or "6543"
+    port = os.getenv("DB_PORT") or "5432"
     name = os.getenv("DB_NAME") or "postgres"
     user = os.getenv("DB_USER")            # напр.: postgres.ajcommzzdmzpyzzqclgb
     pwd  = os.getenv("DB_PASSWORD")        # твой пароль
@@ -573,8 +575,6 @@ async def startup():
     ensure("static/offer.html",
            """<!doctype html><meta charset="utf-8"><h1>Публичная оферта</h1><p>Открытие фиксируется.</p>""")
 
-    init_db()
-
     try:
         await set_webhook()
     except Exception as e:
@@ -583,5 +583,17 @@ async def startup():
     async def loop():
         while True:
             await asyncio.sleep(3600)
+    global loop_task
+    loop_task = asyncio.create_task(loop())         
 
     asyncio.create_task(loop())
+
+@app.on_event("shutdown")
+async def shutdown():
+    global loop_task
+    if loop_task:
+        loop_task.cancel()
+        try:
+            await loop_task
+        except asyncio.CancelledError:
+            pass
