@@ -56,8 +56,6 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_HOST = os.getenv("DB_HOST", "").strip()
 DB_PORT = int(os.getenv("DB_PORT", "6543"))
 DB_NAME = os.getenv("DB_NAME", "postgres").strip()
-DB_USER = os.getenv("DB_USER", "").strip()
-DB_PASSWORD = os.getenv("DB_PASSWORD", "").strip()
 PROJECT_REF = os.getenv("PROJECT_REF", "").strip()  # например ajcommzzdmzpyzzqclgb
 
 # ===== FastAPI & static =====
@@ -115,14 +113,9 @@ def db():
     host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
     port = os.getenv("DB_PORT") or "5432"
     name = os.getenv("DB_NAME") or "postgres"
-    user = os.getenv("DB_USER")            # напр.: postgres.ajcommzzdmzpyzzqclgb
-    pwd  = os.getenv("DB_PASSWORD")        # твой пароль
     project_ref = os.getenv("PROJECT_REF") # напр.: ajcommzzdmzpyzzqclgb
 
-    if not (user and pwd):
-        raise RuntimeError("DB_USER/DB_PASSWORD не заданы в переменных окружения.")
-
-    # ВАЖНО: для pgbouncer используем options=project=REF и sslmode=require
+       # ВАЖНО: для pgbouncer используем options=project=REF и sslmode=require
     dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
     if project_ref:
         dsn += f" options=project={project_ref}"
