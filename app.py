@@ -109,7 +109,9 @@ main_menu = ReplyKeyboardMarkup(
 
 # ================= DB helpers =================
 def db():
+
 """Подключение к БД через DSN-строку.Работает и с Supabase pooler: 6543 + options=project=REF."""
+
     host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
     port = os.getenv("DB_PORT") or "6543"
     name = os.getenv("DB_NAME") or "postgres"
@@ -127,7 +129,6 @@ def db():
     return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
 
 def db():
-    """Подключение к БД через DSN-строку. Работает и с Supabase pooler: порт 6543 + options=project=REF."""
     host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
     port = os.getenv("DB_PORT") or "6543"
     name = os.getenv("DB_NAME") or "postgres"
@@ -145,10 +146,8 @@ def db():
 
     return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
 
-
 def init_db():
-    """Создает/мигрирует таблицы. При ошибке логирует и продолжает работу приложения."""
-    try:
+      try:
         with db() as con, con.cursor() as cur:
             # users
             cur.execute(dedent("""
