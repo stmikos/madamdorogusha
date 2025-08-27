@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 from textwrap import dedent
-import psycopg
+import psycopg2
 from psycopg.rows import dict_row
 # ===== imports =====
 import os, re, asyncio, logging, secrets
@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
+import os
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
