@@ -117,24 +117,7 @@ def db():
     port = str(DB_PORT or "5432")
     name = DB_NAME or "postgres"
     if not DB_USER or not DB_PASSWORD:
-        raise RuntimeError("DB_USER/DB_PASSWORD не заданы и нет DATABASE_URL")
-    # Подключаемся по именованным параметрам (без ручной сборки DSN), с SSL и опцией project для pooler
-    return psycopg.connect(
-        host=host,
-        port=port,
-        dbname=name,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        sslmode="require",
-        options=(f"project={PROJECT_REF}" if PROJECT_REF else None),
-        row_factory=dict_row,
-        connect_timeout=10,
-    )
-    
-       # ВАЖНО: для pgbouncer используем options=project=REF и sslmode=require
-    dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
-    if PROJECT_REF:
-        dsn += f" options=project={PROJECT_REF}"
+  
 
     return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
 
