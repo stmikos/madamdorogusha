@@ -7,7 +7,7 @@ from psycopg.rows import dict_row
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import md5, sha256
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -186,7 +186,6 @@ def init_db():
                 );
             """))
             cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);")
-
             con.commit()
     except Exception as e:
         logger.error("init_db failed: %s", e)
