@@ -109,14 +109,13 @@ def now_ts() -> datetime:
     return datetime.now(timezone.utc)
 
 def db():
-
     host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
     port = os.getenv("DB_PORT") or "5432"
     name = os.getenv("DB_NAME") or "postgres"
-    project_ref = os.getenv("PROJECT_REF") # напр.: ajcommzzdmzpyzzqclgb
+    
 
        # ВАЖНО: для pgbouncer используем options=project=REF и sslmode=require
-    dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
+    dsn = f"host={host} port={port} dbname={name} password={pwd} sslmode=require"
     if project_ref:
         dsn += f" options=project={project_ref}"
 
