@@ -56,6 +56,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_HOST = os.getenv("DB_HOST", "").strip()
 DB_PORT = int(os.getenv("DB_PORT", "6543"))
 DB_NAME = os.getenv("DB_NAME", "postgres").strip()
+DB_USER = os.getenv("DB_USER", "").strip()
+DB_PASSWORD = os.getenv("DB_PASSWORD", "").strip()
 PROJECT_REF = os.getenv("PROJECT_REF", "").strip()  # например ajcommzzdmzpyzzqclgb
 
 # ===== FastAPI & static =====
@@ -110,10 +112,24 @@ def now_ts() -> datetime:
 
 def db():
     if DATABASE_URL:
-        return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
-    host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
-    port = os.getenv("DB_PORT") or "5432"
-    name = os.getenv("DB_NAME") or "postgres"
+       return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
+    host = DB_HOST or "aws-1-eu-north-1.pooler.supabase.com"
+    port = str(DB_PORT or "5432")
+    name = DB_NAME or "postgres"
+    if not DB_USER or not DB_PASSWORD:
+        raise RuntimeError("DB_USER/DB_PASSWORD не заданы и нет DATABASE_URL")
+    # Подключаемся по именованным параметрам (без ручной сборки DSN), с SSL и опцией project для pooler
+    return psycopg.connect(
+        host=host,
+        port=port,
+        dbname=name,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        sslmode="require",
+        options=(f"project={PROJECT_REF}" if PROJECT_REF else None),
+        row_factory=dict_row,
+        connect_timeout=10,
+    )
     
        # ВАЖНО: для pgbouncer используем options=project=REF и sslmode=require
     dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
@@ -232,7 +248,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture": "ru",
         "Encoding": "utf-8",
-        "IsTest": "1" if ROBOKASSA_TEST_MODE != "1" else "0",
+        "IsTest": "1" if ROBOKASSA_TEST_MODE == "1" else "0",
     }
     url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
     logger.info(f"[RK DEBUG] {params}")
