@@ -109,15 +109,17 @@ def now_ts() -> datetime:
     return datetime.now(timezone.utc)
 
 def db():
+    if DATABASE_URL:
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
     host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
     port = os.getenv("DB_PORT") or "5432"
     name = os.getenv("DB_NAME") or "postgres"
     
 
        # ВАЖНО: для pgbouncer используем options=project=REF и sslmode=require
-    dsn = f"host={host} port={port} dbname={name} password={pwd} sslmode=require"
-    if project_ref:
-        dsn += f" options=project={project_ref}"
+    dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
+    if PROJECT_REF:
+        dsn += f" options=project={PROJECT_REF}"
 
     return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
 
@@ -576,9 +578,7 @@ async def startup():
         while True:
             await asyncio.sleep(3600)
     global loop_task
-    loop_task = asyncio.create_task(loop())         
-
-    asyncio.create_task(loop())
+    loop_task = asyncio.create_task(loop())
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -589,3 +589,5 @@ async def shutdown():
             await loop_task
         except asyncio.CancelledError:
             pass
+       finally:
+           loop_task = None
