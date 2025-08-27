@@ -115,7 +115,6 @@ def db():
     port = os.getenv("DB_PORT") or "5432"
     name = os.getenv("DB_NAME") or "postgres"
     
-
        # ВАЖНО: для pgbouncer используем options=project=REF и sslmode=require
     dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
     if PROJECT_REF:
