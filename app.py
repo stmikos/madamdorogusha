@@ -109,9 +109,7 @@ main_menu = ReplyKeyboardMarkup(
 
 # ================= DB helpers =================
 def db():
-
-"""Подключение к БД через DSN-строку.Работает и с Supabase pooler: 6543 + options=project=REF."""
-
+    #Connect to Postgres via Supabase PgBouncer (port 6543).Works with options=project=<PROJECT_REF>.
     host = os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com"
     port = os.getenv("DB_PORT") or "6543"
     name = os.getenv("DB_NAME") or "postgres"
