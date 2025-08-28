@@ -587,4 +587,4 @@ async def shutdown():
         except asyncio.CancelledError:
             pass
     finally:
-    loop_task = None
+           loop_task = None
