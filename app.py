@@ -25,6 +25,10 @@ from aiogram.types import (
 
 import psycopg
 
+# ================= DB helpers =================
+def now_ts() -> datetime:
+    return datetime.now(timezone.utc)
+    
 # ===== logging =====
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
@@ -105,10 +109,6 @@ main_menu = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
-
-# ================= DB helpers =================
-def now_ts() -> datetime:
-    return datetime.now(timezone.utc)
 
 def db():
     if DATABASE_URL:
@@ -586,5 +586,5 @@ async def shutdown():
             await loop_task
         except asyncio.CancelledError:
             pass
-     finally:
+    finally:
         loop_task = None
