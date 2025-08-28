@@ -558,8 +558,7 @@ async def startup():
         init_db()
     except Exception as e:
         logger.error("startup init_db error: %s", e)
-    
-    # Автосоздание файлов документов
+        # Автосоздание файлов документов
     ensure("static/policy.html",
            """<!doctype html><meta charset="utf-8"><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>""")
     ensure("static/consent.html",
