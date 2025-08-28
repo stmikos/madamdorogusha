@@ -146,6 +146,35 @@ def init_db():
                 );
             """))
 
+             cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);")
+
+            # журнал подтверждений
+            cur.execute(dedent("""
+                CREATE TABLE IF NOT EXISTS legal_confirms (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_id BIGINT,
+                    token TEXT,
+                    confirmed_at TIMESTAMPTZ DEFAULT now()
+                );
+            """))
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_legal_confirms_tg ON legal_confirms(tg_id);")
+
+            # журнал просмотров документов
+            cur.execute(dedent("""
+                CREATE TABLE IF NOT EXISTS doc_views (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_id BIGINT,
+                    token TEXT,
+                    doc_type TEXT,              -- policy | consent | offer
+                    ip TEXT,
+                    user_agent TEXT,
+                    opened_at TIMESTAMPTZ DEFAULT now()
+                );
+            """))
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_doc_views_token ON doc_views(token);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_doc_views_tg ON doc_views(tg_id);")
+            con.commit()
+
             # добавляем недостающие колонки (безопасно, если уже есть)
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;")
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;")
@@ -273,11 +302,17 @@ def pay_kb(url: str) -> InlineKeyboardMarkup:
 
 # ================= Документы =================
 def legal_keyboard(token: str) -> InlineKeyboardMarkup:
+    """Только одна кнопка — подтверждение."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✔️ Подтвердить ознакомление", callback_data=f"legal_agree:{token}")]
+    ])
+
+def docs_keyboard(token: str) -> InlineKeyboardMarkup:
+    """Отдельная клавиатура со ссылками на документы (по желанию пользователя)."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📄 Политика конфиденциальности", url=f"{BASE_URL}/policy/{token}")],
         [InlineKeyboardButton(text="✅ Согласие на обработку данных", url=f"{BASE_URL}/consent/{token}")],
         [InlineKeyboardButton(text="📑 Публичная оферта", url=f"{BASE_URL}/offer/{token}")],
-        [InlineKeyboardButton(text="✔️ Я ознакомился(лась)", callback_data=f"legal_agree:{token}")],
     ])
 
 def get_or_make_token(tg_id: int) -> str:
@@ -307,9 +342,8 @@ async def on_start(message: Message):
         "✨Добро пожаловать в канал «Погружаясь в Кундалини»!✨
 Здесь мы открываем двери в мир, где дыхание становится мостом между телом и духом,
 мантры пробуждают скрытую энергию, а движение превращается в медитацию.\n\n"
-        "1) Откройте три документа ниже (по кнопкам)\n"
-        "2) Нажмите «✔️ Я ознакомился(лась)»\n"
-        "3) Затем оплатите подписку"
+        "Нажмите «✔️ Подтвердить ознакомление», чтобы продолжить.\n"
+        "Документ можно открыть в меню «📄 Документы»."
     )
     try:
         await message.answer_photo(FSInputFile(WELCOME_IMAGE_PATH), caption=txt, reply_markup=legal_keyboard(token))
@@ -331,7 +365,7 @@ async def on_help(message: Message):
 @dp.message(Command("docs"))
 async def on_docs(message: Message):
     token = get_or_make_token(message.from_user.id)
-    await message.answer("Документы:", reply_markup=legal_keyboard(token))
+    await message.answer("Документы:", reply_markup=docs_keyboard(token))
 
 @dp.callback_query(F.data.startswith("legal_agree:"))
 async def on_legal_agree(cb: CallbackQuery):
@@ -360,9 +394,37 @@ async def on_legal_agree(cb: CallbackQuery):
         con.commit()
 
     inv_id = new_payment(row["tg_id"], PRICE_RUB)
+    token = cb.data.split(":", 1)[1]
+    # Находим пользователя по токену
+    with db() as con, con.cursor() as cur:
+        cur.execute("SELECT tg_id FROM users WHERE policy_token=%s", (token,))
+        row = cur.fetchone()
+    if not row:
+        await cb.answer("Сессия не найдена. Нажмите /start", show_alert=True)
+        return
+
+    # Фиксируем согласие и сразу предлагаем оплату
+    with db() as con, con.cursor() as cur:
+        cur.execute("UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
+                    (now_ts(), "legal_ok", row["tg_id"]))
+        con.commit()
+
+    inv_id = new_payment(row["tg_id"], PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
     await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
     await cb.answer()
+    # Фиксируем согласие и логируем в audit-таблицу
+    with db() as con, con.cursor() as cur:
+        cur.execute(
+            "UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
+            (now_ts(), "legal_ok", row["tg_id"])
+        )
+        cur.execute(
+            "INSERT INTO legal_confirms(tg_id, token, confirmed_at) VALUES (%s,%s,%s)",
+            (row["tg_id"], token, now_ts())
+        )
+        con.commit()
+    logger.info("LEGAL CONFIRM: tg_id=%s token=%s", row["tg_id"], token)
 
 @dp.message(F.text == "💳 Оплатить подписку")
 @dp.message(Command("pay"))
@@ -431,33 +493,54 @@ def _read_html(path: str) -> str:
         return f.read()
 
 @app.get("/policy/{token}", response_class=HTMLResponse)
-def policy_with_token(token: str):
++def policy_with_token(token: str, request: Request):
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent", "")
     try:
         with db() as con, con.cursor() as cur:
             cur.execute("UPDATE users SET policy_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
+                cur.execute("""
+                INSERT INTO doc_views(tg_id, token, doc_type, ip, user_agent)
+                SELECT tg_id, %s, %s, %s, %s FROM users WHERE policy_token=%s
+            """, (token, "policy", ip, ua, token))
             con.commit()
     except Exception as e:
         logger.error(f"policy update failed: {e}")
+        logger.info("DOC VIEW: type=policy token=%s ip=%s", token, ip)
     return HTMLResponse(_read_html("static/policy.html"))
 
 @app.get("/consent/{token}", response_class=HTMLResponse)
-def consent_with_token(token: str):
+def consent_with_token(token: str, request: Request):
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent", "")
     try:
         with db() as con, con.cursor() as cur:
             cur.execute("UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
+            cur.execute("""
+                INSERT INTO doc_views(tg_id, token, doc_type, ip, user_agent)
+                SELECT tg_id, %s, %s, %s, %s FROM users WHERE policy_token=%s
+            """, (token, "consent", ip, ua, token))
             con.commit()
     except Exception as e:
         logger.error(f"consent update failed: {e}")
+        logger.info("DOC VIEW: type=consent token=%s ip=%s", token, ip)
     return HTMLResponse(_read_html("static/consent.html"))
 
 @app.get("/offer/{token}", response_class=HTMLResponse)
-def offer_with_token(token: str):
+def offer_with_token(token: str, request: Request):
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent", "")
     try:
         with db() as con, con.cursor() as cur:
             cur.execute("UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
+            cur.execute("""
+                INSERT INTO doc_views(tg_id, token, doc_type, ip, user_agent)
+                SELECT tg_id, %s, %s, %s, %s FROM users WHERE policy_token=%s
+            """, (token, "offer", ip, ua, token))
             con.commit()
     except Exception as e:
         logger.error(f"offer update failed: {e}")
+        logger.info("DOC VIEW: type=offer token=%s ip=%s", token, ip)
     return HTMLResponse(_read_html("static/offer.html"))
 
 # Plain-страницы для ручной проверки (без фиксации)
