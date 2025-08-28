@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import logging
 from textwrap import dedent
 from psycopg.rows import dict_row
 # ===== imports =====
@@ -234,7 +233,8 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "IsTest": "1" if ROBOKASSA_TEST_MODE == "1" else "0",
     }
     url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
-    logger.info(f"[RK DEBUG] {params}")
+    safe_log_params = {k: v for k, v in params.items() if k != "SignatureValue"}
+    logger.info(f"[RK DEBUG] {safe_log_params}")
     return url
 
 def new_payment(tg_id: int, out_sum: float) -> int:
@@ -587,4 +587,4 @@ async def shutdown():
         except asyncio.CancelledError:
             pass
     finally:
-        loop_task = None
+    loop_task = None
