@@ -57,7 +57,7 @@ SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
 # БД: можно или одной строкой, или полями (для PgBouncer 6543)
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_HOST = os.getenv("DB_HOST", "").strip()
-DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_PORT = int(os.getenv("DB_PORT", "6543"))
 DB_NAME = os.getenv("DB_NAME", "postgres").strip()
 DB_USER = os.getenv("DB_USER", "").strip()
 DB_PASSWORD = os.getenv("DB_PASSWORD", "").strip()
@@ -113,7 +113,7 @@ def db():
     if DATABASE_URL:
        return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
     host = DB_HOST or "aws-1-eu-north-1.pooler.supabase.com"
-    port = str(DB_PORT or "5432")
+    port = str(DB_PORT or "6543")
     name = DB_NAME or "postgres"
     if not DB_USER or not DB_PASSWORD:
        raise RuntimeError("DB_USER and DB_PASSWORD must be set")
