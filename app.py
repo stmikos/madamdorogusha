@@ -116,7 +116,6 @@ def db():
     port = str(DB_PORT or "5432")
     name = DB_NAME or "postgres"
     if not DB_USER or not DB_PASSWORD:
-
        raise RuntimeError("DB_USER and DB_PASSWORD must be set")
     dsn = f"postgresql://{DB_USER}:{DB_PASSWORD}@{host}:{port}/{name}"
     return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
@@ -587,4 +586,4 @@ async def shutdown():
         except asyncio.CancelledError:
             pass
     finally:
-           loop_task = None
+        loop_task = None
