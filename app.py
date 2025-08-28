@@ -120,6 +120,19 @@ def db():
     dsn = f"postgresql://{DB_USER}:{DB_PASSWORD}@{host}:{port}/{name}"
     return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10)
 
+    # Подключаемся параметрами — без сборки DSN-строки
+    return psycopg.connect(
+        host=host,
+        port=port,
+        dbname=name,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        sslmode="require",
+        application_name="liberte-bot",
+        connect_timeout=10,
+        row_factory=dict_row,
+    )
+    
 def init_db():
 
     try:
