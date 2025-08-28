@@ -579,11 +579,12 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     global loop_task
-    if loop_task:
-        loop_task.cancel()
-        try:
-            await loop_task
-        except asyncio.CancelledError:
-            pass
+    try:
+        if loop_task:
+            loop_task.cancel()
+            try:
+                await loop_task
+            except asyncio.CancelledError:
+                pass
     finally:
         loop_task = None
