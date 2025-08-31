@@ -51,7 +51,7 @@ ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "").strip()
 ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "").strip()
 ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "").strip()
 ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").upper()  # MD5|SHA256
-ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "1")  # "1" тест, "0" боевой
+ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0")  # "1" тест, "0" боевой
 
 PRICE_RUB = float(os.getenv("PRICE_RUB", "1"))
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
@@ -286,18 +286,23 @@ def sign_result(out_sum: float, inv_id: int) -> str:
     return _sign(base)
 
 
-def build_pay_url(inv_id: int, out_sum: float, description: str = "Подписка на 30 дней") -> str:
+def build_pay_url(inv_id: int, out_sum: float, description: str) -> str:
+    s = f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD1}"
+    sig = _sign(s)
+    logger.info("RK CHECK -> InvId=%s OutSum=%.2f base='%s' sig=%s",
+                inv_id, out_sum, f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:***", sig)
+
     params = {
         "MerchantLogin": ROBOKASSA_LOGIN,
         "OutSum": f"{out_sum:.2f}",
         "InvId": str(inv_id),
         "Description": description,
-        "SignatureValue": sign_success(out_sum, inv_id),
+        "SignatureValue": sig,
         "Culture": "ru",
         "Encoding": "utf-8",
-        "IsTest": "1" if ROBOKASSA_TEST_MODE == "1" else "0",
+        "IsTest": "0" if ROBOKASSA_TEST_MODE == "0" else "1",
     }
-    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
+    return "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
     safe_log_params = {k: v for k, v in params.items() if k != "SignatureValue"}
     logger.info("[RK DEBUG] %s", safe_log_params)
     return url
@@ -403,7 +408,7 @@ async def on_docs(message: Message):
 async def on_legal_agree(cb: CallbackQuery):
     token = cb.data.split(":", 1)[1]
 
-    # Находим пользователя по токену
+    # ищем пользователя по токену
     with db() as con, con.cursor() as cur:
         cur.execute("SELECT tg_id FROM users WHERE policy_token=%s", (token,))
         row = cur.fetchone()
@@ -414,7 +419,7 @@ async def on_legal_agree(cb: CallbackQuery):
 
     tg_id = row["tg_id"]
 
-    # Фиксируем согласие + лог в журнал
+    # фиксируем согласие
     with db() as con, con.cursor() as cur:
         cur.execute(
             "UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
@@ -425,11 +430,11 @@ async def on_legal_agree(cb: CallbackQuery):
             (tg_id, token, now_ts())
         )
         con.commit()
-    logger.info("LEGAL CONFIRM: tg_id=%s token=%s", tg_id, token)
 
-    # Создаём счёт и даём кнопку оплаты
+    # создаём один (!) платёж и сразу строим ссылку
     inv_id = new_payment(tg_id, PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
+
     await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
     await cb.answer()
 
