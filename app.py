@@ -53,7 +53,7 @@ ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "").strip()
 ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").upper()  # MD5|SHA256
 ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0")  # "1" тест, "0" боевой
 
-PRICE_RUB = float(os.getenv("PRICE_RUB", "1"))
+PRICE_RUB = float(os.getenv("PRICE_RUB", "10"))
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
 
 # БД: можно одной строкой или по полям (для Supabase pooler 6543)
