@@ -270,7 +270,11 @@ def list_active_users():
 # =============== Robokassa ===============
 def _sign(s: str) -> str:
     return sha256(s.encode()).hexdigest() if ROBOKASSA_SIGNATURE_ALG == "SHA256" else md5(s.encode()).hexdigest()
-
+    return (
+        sha256(s.encode()).hexdigest()
+        if ROBOKASSA_SIGNATURE_ALG == "SHA256"
+        else md5(s.encode()).hexdigest()
+    ).upper()
 
 def sign_success(out_sum: float, inv_id: int) -> str:
     base = f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD1}"
