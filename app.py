@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+b# -*- coding: utf-8 -*-
 from textwrap import dedent
 from psycopg.rows import dict_row
 import os, re, asyncio, logging, secrets
@@ -291,7 +291,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture": "ru",
         "Encoding": "utf-8",
-        "IsTest": "1" if ROBOKASSA_TEST_MODE == "1" else "0",
+        "IsTest": "1" if ROBOKASSA_TEST_MODE == "0" else "0",
     }
     url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
     safe_log_params = {k: v for k, v in params.items() if k != "SignatureValue"}
