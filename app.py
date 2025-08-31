@@ -1,4 +1,4 @@
-b# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from textwrap import dedent
 from psycopg.rows import dict_row
 import os, re, asyncio, logging, secrets
