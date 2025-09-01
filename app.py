@@ -5,6 +5,7 @@ import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import md5, sha256
 from urllib.parse import urlencode
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -53,7 +54,12 @@ ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "").strip()
 ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").upper()  # MD5|SHA256
 ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0")  # "1" тест, "0" боевой
 
-PRICE_RUB = float(os.getenv("PRICE_RUB", "10"))
+# читаем цену из .env, по умолчанию "10"
+PRICE_RUB = Decimal(os.getenv("PRICE_RUB", "10")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+def money2(x: Decimal) -> str:
+    return format(x, ".2f")  # всегда '10.00'
+
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
 
 # БД: можно одной строкой или по полям (для Supabase pooler 6543)
@@ -277,7 +283,7 @@ def _sign(s: str) -> str:
     ).upper()
 
 def sign_success(out_sum: float, inv_id: int) -> str:
-    base = f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD1}"
+    base = f"{ROBOKASSA_LOGIN}:{money2(out_sum)}:{inv_id}:{ROBOKASSA_PASSWORD1}"
     return _sign(base)
 
 
@@ -294,7 +300,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str) -> str:
 
     params = {
         "MerchantLogin": ROBOKASSA_LOGIN,
-        "OutSum": f"{out_sum:.2f}",
+        "OutSum": money2(out_sum),
         "InvId": str(inv_id),
         "Description": description,
         "SignatureValue": sig,
