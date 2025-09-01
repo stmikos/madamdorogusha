@@ -295,9 +295,7 @@ def sign_result(out_sum: float, inv_id: int) -> str:
 def build_pay_url(inv_id: int, out_sum: float, description: str) -> str:
     s = f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD1}"
     sig = _sign(s)
-    logger.info("RK CHECK -> InvId=%s OutSum=%.2f base='%s' sig=%s",
-                inv_id, out_sum, f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:***", sig)
-
+    
     params = {
         "MerchantLogin": ROBOKASSA_LOGIN,
         "OutSum": money2(out_sum),
@@ -308,9 +306,15 @@ def build_pay_url(inv_id: int, out_sum: float, description: str) -> str:
         "Encoding": "utf-8",
         "IsTest": "0" if ROBOKASSA_TEST_MODE == "0" else "1",
     }
-    return "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
-    safe_log_params = {k: v for k, v in params.items() if k != "SignatureValue"}
-    logger.info("[RK DEBUG] %s", safe_log_params)
+        url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
+    logger.info(
+        "RK CHECK -> InvId=%s OutSum=%.2f base='%s' sig=%s url=%s",
+        inv_id,
+        out_sum,
+        f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:***",
+        sig,
+        url,
+    )
     return url
 
 
