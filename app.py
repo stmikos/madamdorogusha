@@ -275,7 +275,7 @@ def list_active_users():
 
 # =============== Robokassa ===============
 def _sign(s: str) -> str:
-        return (
+    return (
         sha256(s.encode()).hexdigest()
         if ROBOKASSA_SIGNATURE_ALG == "SHA256"
         else md5(s.encode()).hexdigest()
