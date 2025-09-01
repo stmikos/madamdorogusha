@@ -275,8 +275,7 @@ def list_active_users():
 
 # =============== Robokassa ===============
 def _sign(s: str) -> str:
-    return sha256(s.encode()).hexdigest() if ROBOKASSA_SIGNATURE_ALG == "SHA256" else md5(s.encode()).hexdigest()
-    return (
+        return (
         sha256(s.encode()).hexdigest()
         if ROBOKASSA_SIGNATURE_ALG == "SHA256"
         else md5(s.encode()).hexdigest()
@@ -306,6 +305,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str) -> str:
         "Encoding": "utf-8",
         "IsTest": "0" if ROBOKASSA_TEST_MODE == "0" else "1",
     }
+
      url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
     logger.info(
         "RK CHECK -> InvId=%s OutSum=%.2f base='%s' sig=%s url=%s",
@@ -338,7 +338,7 @@ def set_payment_paid(inv_id: int):
 
 def pay_kb(url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💳 Оплатить {int(PRICE_RUB)} ₽ через Robokassa", url=url)]
+        [InlineKeyboardButton(text=f"💳 Оплатить {money2(PRICE_RUB)} ₽ через Robokassa", url=url)]
     ])
 
 
