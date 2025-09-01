@@ -304,8 +304,8 @@ def build_pay_url(inv_id: int, out_sum: float, description: str) -> str:
         "Culture": "ru",
         "Encoding": "utf-8",
         "IsTest": "0" if ROBOKASSA_TEST_MODE == "0" else "1",
+        
     }
-
      url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
     logger.info(
         "RK CHECK -> InvId=%s OutSum=%.2f base='%s' sig=%s url=%s",
