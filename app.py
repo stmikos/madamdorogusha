@@ -146,18 +146,20 @@ async def db() -> psycopg.AsyncConnection:
         raise RuntimeError("DB_USER/DB_PASSWORD не заданы в переменных окружения.")
 
     # Для Supabase pooler обязателен sslmode=require, а также options=project=PROJECT_REF
-    dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
+    dsn = (
+        f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
+    )
     if PROJECT_REF:
         dsn += f" options=project={PROJECT_REF}"
 
-        return await psycopg.AsyncConnection.connect(
+    return await psycopg.AsyncConnection.connect(
         dsn, row_factory=dict_row, connect_timeout=10
     )
 
 async def init_db():
     """Создаёт/мигрирует таблицы и индексы (идемпотентно)."""
     try:
-                async with await db() as con:
+            async with await db() as con:
             async with con.cursor() as cur:
                 # users
                 await cur.execute(dedent("""
@@ -259,7 +261,7 @@ async def upsert_user(tg_id: int, **kwargs):
             if data:
                 sets = [f"{k}=%s" for k in data] + ["updated_at=%s"]
                 vals = list(data.values()) + [now_ts(), tg_id]
-               async with await db() as con:
+                async with await db() as con:
                     async with con.cursor() as cur:
                         await cur.execute(
                             f"UPDATE users SET {', '.join(sets)} WHERE tg_id=%s",
@@ -310,6 +312,15 @@ def sign_result(out_sum: float, inv_id: int) -> str:
 
 
 def build_pay_url(inv_id: int, out_sum: float, description: str) -> str:
+    if not ROBOKASSA_LOGIN or not ROBOKASSA_PASSWORD1:
+        missing = []
+        if not ROBOKASSA_LOGIN:
+            missing.append("ROBOKASSA_LOGIN")
+        if not ROBOKASSA_PASSWORD1:
+            missing.append("ROBOKASSA_PASSWORD1")
+        msg = f"Robokassa credentials missing: {', '.join(missing)}"
+        logger.warning(msg)
+        raise RuntimeError(msg)
     s = f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD1}"
     sig = _sign(s)
     
@@ -322,9 +333,10 @@ def build_pay_url(inv_id: int, out_sum: float, description: str) -> str:
         "Culture": "ru",
         "Encoding": "utf-8",
         "IsTest": "0" if ROBOKASSA_TEST_MODE == "0" else "1",
+
         
     }
-     url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
+    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
     logger.info(
         "RK CHECK -> InvId=%s OutSum=%.2f base='%s' sig=%s url=%s",
         inv_id,
@@ -387,7 +399,7 @@ async def get_or_make_token(tg_id: int) -> str:
     if u and u.get("policy_token"):
         return u["policy_token"]
     token = secrets.token_urlsafe(16)
-    await_user(tg_id, policy_token=token, status="new")
+    await_upsert_user(tg_id, policy_token=token, status="new")
     return token
 
 
@@ -406,7 +418,7 @@ async def _legal_ok(tg_id: int) -> bool:
 # =============== Bot handlers ===============
 @dp.message(CommandStart())
 async def on_start(message: Message):
-    token = await_or_make_token(message.from_user.id)
+    token = await_get_or_make_token(message.from_user.id)
     txt = (
         "✨ Добро пожаловать в канал «Погружаясь в Кундалини»!\n"
         "Здесь мы работаем с дыханием, мантрами и медитативным движением.\n\n"
@@ -434,7 +446,7 @@ async def on_help(message: Message):
 @dp.message(F.text == "📄 Документы")
 @dp.message(Command("docs"))
 async def on_docs(message: Message):
-    token = await_or_make_token(message.from_user.id)
+    token = await_get_or_make_token(message.from_user.id)
     await message.answer("Документы:", reply_markup=docs_keyboard(token))
 
 
@@ -455,7 +467,7 @@ async def on_legal_agree(cb: CallbackQuery):
     tg_id = row["tg_id"]
 
     # фиксируем согласие
-   async with await db() as con:
+async with await db() as con:
         async with con.cursor() as cur:
             await cur.execute(
                 "UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
@@ -468,7 +480,7 @@ async def on_legal_agree(cb: CallbackQuery):
             await con.commit()
 
     # создаём один (!) платёж и сразу строим ссылку
-    inv_id = await_payment(tg_id, PRICE_RUB)
+    inv_id = await_new_payment(tg_id, PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
 
     await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
@@ -488,7 +500,7 @@ async def on_pay(message: Message):
         return
 
     try:
-        inv_id = await_payment(tg_id, PRICE_RUB)
+        inv_id = await_new_payment(tg_id, PRICE_RUB)
         url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
         await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
     except Exception as e:
@@ -504,7 +516,7 @@ def bar(progress: float, width: int = 20) -> str:
 @dp.message(F.text == "📊 Мой статус")
 @dp.message(Command("stats"))
 async def on_stats(message: Message):
-    u = get_user(message.from_user.id)
+    u = await_get_user(message.from_user.id)
     if not u or not u.get("valid_until"):
         await message.answer("Подписка пока не активна.")
         return
@@ -545,7 +557,7 @@ def _read_html(path: str) -> str:
 
 
 @app.get("/policy/{token}", response_class=HTMLResponse)
-async policy_with_token(token: str, request: Request):
+async def_policy_with_token(token: str, request: Request):
     ip = request.client.host if request.client else None
     ua = request.headers.get("user-agent", "")
     try:
@@ -570,12 +582,12 @@ async policy_with_token(token: str, request: Request):
 
 
 @app.get("/consent/{token}", response_class=HTMLResponse)
-async consent_with_token(token: str, request: Request):
+async def_consent_with_token(token: str, request: Request):
     ip = request.client.host if request.client else None
     ua = request.headers.get("user-agent", "")
     try:
        async with await db() as con:
-            async with con.cursor() as cur:
+        async with con.cursor() as cur:
                 await cur.execute(
                     "UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s",
                     (now_ts(), token),
@@ -595,11 +607,11 @@ async consent_with_token(token: str, request: Request):
 
 
 @app.get("/offer/{token}", response_class=HTMLResponse)
-async offer_with_token(token: str, request: Request):
+async def_offer_with_token(token: str, request: Request):
     ip = request.client.host if request.client else None
     ua = request.headers.get("user-agent", "")
     try:
-         async with await db() as con:
+        async with await db() as con:
             async with con.cursor() as cur:
                 await cur.execute(
                     "UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s",
@@ -678,7 +690,7 @@ async def pay_result(request: Request):
 
     tg_id = row["tg_id"]
     valid_until = now_ts() + timedelta(days=SUBSCRIPTION_DAYS)
-    await_user(tg_id, status="active", valid_until=valid_until, remind_3d_sent=0)
+    await_upsert_user(tg_id, status="active", valid_until=valid_until, remind_3d_sent=0)
 
     # Пытаемся выдать инвайт в канал
     if bot and CHANNEL_ID:
