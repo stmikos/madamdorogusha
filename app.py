@@ -159,72 +159,122 @@ async def db() -> psycopg.AsyncConnection:
 async def init_db():
     """Создаёт/мигрирует таблицы и индексы (идемпотентно)."""
     try:
-            async with await db() as con:
+        async with await db() as con:
             async with con.cursor() as cur:
                 # users
-                await cur.execute(dedent("""
-                    CREATE TABLE IF NOT EXISTS users (
-                        tg_id BIGINT PRIMARY KEY,
-                        created_at TIMESTAMPTZ,
-                        updated_at TIMESTAMPTZ
-                    );
-                """))
+               await cur.execute(
+                    dedent(
+                        """
+                        CREATE TABLE IF NOT EXISTS users (
+                            tg_id BIGINT PRIMARY KEY,
+                            created_at TIMESTAMPTZ,
+                            updated_at TIMESTAMPTZ
+                        );
+                        """
+                    )
+                )
 
                 # добавляем недостающие колонки
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new';")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_token TEXT;")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_viewed_at TIMESTAMPTZ;")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_viewed_at TIMESTAMPTZ;")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS offer_viewed_at TIMESTAMPTZ;")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS legal_confirmed_at TIMESTAMPTZ;")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ;")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_invoice_id BIGINT;")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS remind_3d_sent INT DEFAULT 0;")
-                await cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_pay_msg_id BIGINT;")
-                await cur.execute("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);")
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new';"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_token TEXT;"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_viewed_at TIMESTAMPTZ;"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_viewed_at TIMESTAMPTZ;"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS offer_viewed_at TIMESTAMPTZ;"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS legal_confirmed_at TIMESTAMPTZ;"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ;"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_invoice_id BIGINT;"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS remind_3d_sent INT DEFAULT 0;"
+                )
+                await cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_pay_msg_id BIGINT;"
+                )
+                await cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);"
+                )
 
                 # payments
-                await cur.execute(dedent("""
-                    CREATE TABLE IF NOT EXISTS payments (
-                        inv_id BIGSERIAL PRIMARY KEY,
-                        tg_id BIGINT,
-                        out_sum NUMERIC(12,2),
-                        status TEXT,
-                        created_at TIMESTAMPTZ,
-                        paid_at TIMESTAMPTZ,
-                        signature TEXT
-                    );
-                """))
+                await cur.execute(
+                    dedent(
+                        """
+                        CREATE TABLE IF NOT EXISTS payments (
+                            inv_id BIGSERIAL PRIMARY KEY,
+                            tg_id BIGINT,
+                            out_sum NUMERIC(12,2),
+                            status TEXT,
+                            created_at TIMESTAMPTZ,
+                            paid_at TIMESTAMPTZ,
+                            signature TEXT
+                        );
+                        """
+                    )
+                )
+                await cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);"
+                )
                 await cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);")
 
                 # журнал подтверждений
-                await cur.execute(dedent("""
-                    CREATE TABLE IF NOT EXISTS legal_confirms (
-                        id BIGSERIAL PRIMARY KEY,
-                        tg_id BIGINT,
-                        token TEXT,
-                        confirmed_at TIMESTAMPTZ DEFAULT now()
-                    );
-                """))
-                await cur.execute("CREATE INDEX IF NOT EXISTS idx_legal_confirms_tg ON legal_confirms(tg_id);")
+                await cur.execute(
+                    dedent(
+                        """
+                        CREATE TABLE IF NOT EXISTS legal_confirms (
+                            id BIGSERIAL PRIMARY KEY,
+                            tg_id BIGINT,
+                            token TEXT,
+                            confirmed_at TIMESTAMPTZ DEFAULT now()
+                        );
+                        """
+                    )
+                )
+                await cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_legal_confirms_tg ON legal_confirms(tg_id);"
+                )
 
                 # журнал просмотров документов
-                await cur.execute(dedent("""
-                    CREATE TABLE IF NOT EXISTS doc_views (
-                        id BIGSERIAL PRIMARY KEY,
-                        tg_id BIGINT,
-                        token TEXT,
-                        doc_type TEXT,   -- policy | consent | offer
-                        ip TEXT,
-                        user_agent TEXT,
-                        opened_at TIMESTAMPTZ DEFAULT now()
-                    );
-                """))
-                await cur.execute("CREATE INDEX IF NOT EXISTS idx_doc_views_token ON doc_views(token);")
-                await cur.execute("CREATE INDEX IF NOT EXISTS idx_doc_views_tg ON doc_views(tg_id);")
-
+               await cur.execute(
+                    dedent(
+                        """
+                        CREATE TABLE IF NOT EXISTS doc_views (
+                            id BIGSERIAL PRIMARY KEY,
+                            tg_id BIGINT,
+                            token TEXT,
+                            doc_type TEXT,   -- policy | consent | offer
+                            ip TEXT,
+                            user_agent TEXT,
+                            opened_at TIMESTAMPTZ DEFAULT now()
+                        );
+                        """
+                    )
+                )
+                await cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_doc_views_token ON doc_views(token);"
+                )
+                await cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_doc_views_tg ON doc_views(tg_id);"
+                )
                 await con.commit()
     except Exception as e:
         logger.error("init_db failed: %s", e)
@@ -467,7 +517,7 @@ async def on_legal_agree(cb: CallbackQuery):
     tg_id = row["tg_id"]
 
     # фиксируем согласие
-async with await db() as con:
+    async with await db() as con:
         async with con.cursor() as cur:
             await cur.execute(
                 "UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
@@ -480,10 +530,12 @@ async with await db() as con:
             await con.commit()
 
     # создаём один (!) платёж и сразу строим ссылку
-    inv_id = await_new_payment(tg_id, PRICE_RUB)
+    inv_id = await new_payment(tg_id, PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
 
-    await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
+    await cb.message.answer(
+        "Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url)
+    )
     await cb.answer()
 
 
@@ -500,7 +552,7 @@ async def on_pay(message: Message):
         return
 
     try:
-        inv_id = await_new_payment(tg_id, PRICE_RUB)
+        inv_id = await new_payment(tg_id, PRICE_RUB)
         url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
         await message.answer("Готово! Нажмите, чтобы оплатить:", reply_markup=pay_kb(url))
     except Exception as e:
@@ -557,7 +609,7 @@ def _read_html(path: str) -> str:
 
 
 @app.get("/policy/{token}", response_class=HTMLResponse)
-async def_policy_with_token(token: str, request: Request):
+async def policy_with_token(token: str, request: Request):
     ip = request.client.host if request.client else None
     ua = request.headers.get("user-agent", "")
     try:
@@ -582,12 +634,12 @@ async def_policy_with_token(token: str, request: Request):
 
 
 @app.get("/consent/{token}", response_class=HTMLResponse)
-async def_consent_with_token(token: str, request: Request):
+async def consent_with_token(token: str, request: Request):
     ip = request.client.host if request.client else None
     ua = request.headers.get("user-agent", "")
     try:
-       async with await db() as con:
-        async with con.cursor() as cur:
+        async with await db() as con:
+            async with con.cursor() as cur:
                 await cur.execute(
                     "UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s",
                     (now_ts(), token),
@@ -607,7 +659,7 @@ async def_consent_with_token(token: str, request: Request):
 
 
 @app.get("/offer/{token}", response_class=HTMLResponse)
-async def_offer_with_token(token: str, request: Request):
+async def offer_with_token(token: str, request: Request):
     ip = request.client.host if request.client else None
     ua = request.headers.get("user-agent", "")
     try:
