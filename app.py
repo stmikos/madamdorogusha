@@ -58,7 +58,7 @@ ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA2
 ROBOKASSA_TEST_MODE = _clean(os.getenv("ROBOKASSA_TEST_MODE") or "0")  # "1" тест, "0" боевой
 
 # Цена — строго 2 знака
-PRICE_RUB = Decimal(_clean(os.getenv("PRICE_RUB") or "10")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+PRICE_RUB = Decimal(_clean(os.getenv("PRICE_RUB") or "10.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
 
 def money2(x) -> str:
