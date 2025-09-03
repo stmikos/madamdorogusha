@@ -305,7 +305,7 @@ async def list_active_users():
 # =============== Robokassa ===============
 def _sign(s: str) -> str:
     # Возвращаем HEX в нижнем регистре, как в примере Робокассы
-    if ROBOKASSA_SIGNATURE_ALG == "MD5":
+    if ROBOKASSA_SIGNATURE_ALG == "SHA256":
         return hashlib.md5(s.encode("utf-8")).hexdigest()
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
