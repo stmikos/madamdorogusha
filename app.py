@@ -5,6 +5,7 @@ import os, re, asyncio, logging, secrets, hashlib
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 from decimal import Decimal, ROUND_HALF_UP
+from psycopg.conninfo import conninfo_to_dict
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -139,29 +140,41 @@ async def db() -> psycopg.AsyncConnection:
     Вариант 1: DATABASE_URL (полный DSN).
     Вариант 2: поля Supabase Pooler: host/port/db/user/pass + sslmode=require + options=project=REF.
     """
-    if DATABASE_URL:
-        return await psycopg.AsyncConnection.connect(
-            DATABASE_URL, row_factory=dict_row, connect_timeout=10
-        )
+    conn_params: dict = {}
+    try:
+        if DATABASE_URL:
+            conn_str = DATABASE_URL
+            conn_params = conninfo_to_dict(DATABASE_URL)
+            conn_params.pop("password", None)
+        else:
+            host = DB_HOST or "aws-1-eu-north-1.pooler.supabase.com"
+            port = int(DB_PORT or 6543)
+            name = DB_NAME or "postgres"
+            user = DB_USER
+            pwd = DB_PASSWORD
 
-    host = DB_HOST or "aws-1-eu-north-1.pooler.supabase.com"
-    port = int(DB_PORT or 6543)
-    name = DB_NAME or "postgres"
-    user = DB_USER
-    pwd = DB_PASSWORD
+            if not user or not pwd:
+                raise RuntimeError("DB_USER/DB_PASSWORD не заданы в переменных окружения.")
 
-    if not user or not pwd:
-        raise RuntimeError("DB_USER/DB_PASSWORD не заданы в переменных окружения.")
-
-    # Для Supabase pooler обязателен sslmode=require, а также options=project=PROJECT_REF
-    dsn = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
-    if PROJECT_REF:
-        dsn += f" options=project={PROJECT_REF}"
+            # Для Supabase pooler обязателен sslmode=require, а также options=project=PROJECT_REF
+            conn_params = {
+                "host": host,
+                "port": port,
+                "dbname": name,
+                "user": user,
+                "sslmode": "require",
+            }
+            conn_str = f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require"
+            if PROJECT_REF:
+                conn_params["options"] = f"project={PROJECT_REF}"
+                conn_str += f" options=project={PROJECT_REF}"
 
     return await psycopg.AsyncConnection.connect(
-        dsn, row_factory=dict_row, connect_timeout=10
+        comm_str, dsn, row_factory=dict_row, connect_timeout=10
     )
-
+    except psycopg.Error as e:
+        logger.exception("DB connection failed. params=%s", conn_params)
+        raise RuntimeError("Не удалось подключиться к базе данных.") from e
 
 async def init_db():
     """Создаёт/мигрирует таблицы и индексы (идемпотентно)."""
