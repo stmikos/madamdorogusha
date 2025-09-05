@@ -54,9 +54,10 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
 ROBOKASSA_LOGIN = _clean(os.getenv("ROBOKASSA_LOGIN"))
 ROBOKASSA_PASSWORD1 = _clean(os.getenv("ROBOKASSA_PASSWORD1"))
 ROBOKASSA_PASSWORD2 = _clean(os.getenv("ROBOKASSA_PASSWORD2"))
-ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "MD5").upper()  # MD5|SHA256
+ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA256").upper()  # MD5|SHA256
 if ROBOKASSA_SIGNATURE_ALG not in {"MD5", "SHA256"}:
     logger.error("ROBOKASSA_SIGNATURE_ALG must be 'MD5' or 'SHA256', got %s", ROBOKASSA_SIGNATURE_ALG)
+    logger.info("RK: algorithm=%s (env ROBOKASSA_SIGNATURE_ALG)", ROBOKASSA_SIGNATURE_ALG)
     raise RuntimeError("Invalid ROBOKASSA_SIGNATURE_ALG")
 ROBOKASSA_TEST_MODE = _clean(os.getenv("ROBOKASSA_TEST_MODE") or "0")  # "1" тест, "0" боевой
 
