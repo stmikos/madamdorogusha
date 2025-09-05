@@ -1037,5 +1037,7 @@ async def startup():
     # автосоздание html-документов
     ensure("static/policy.html",
            "<!doctype html><meta charset='utf-8'><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>")
-    ensure("static/consent.html",
-           "<!doctype html><meta charset='utf-8'><h1>Согласие на обработку ПДн</h1><p>Открытие фиксиру
+    ensure(
+        "static/consent.html",
+        "<!doctype html><meta charset='utf-8'><h1>Согласие на обработку ПДн</h1><p>Открытие фиксируется.</p>"
+    )
