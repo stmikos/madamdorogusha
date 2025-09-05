@@ -2,7 +2,7 @@
 from textwrap import dedent
 import os, re, asyncio, logging, secrets, hashlib
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Optional
 
@@ -81,10 +81,11 @@ ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA2
 if ROBOKASSA_SIGNATURE_ALG not in {"MD5", "SHA256"}:
     logger.error("ROBOKASSA_SIGNATURE_ALG must be 'MD5' or 'SHA256', got %s", ROBOKASSA_SIGNATURE_ALG)
     raise RuntimeError("Invalid ROBOKASSA_SIGNATURE_ALG")
+    
 if ROBOKASSA_SIGNATURE_ALG == "SHA256":
-    _rk_hash = hashlib.sha256
+    _rk_hash = hashlib.SHA256
 else:
-    _rk_hash = hashlib.md5
+    _rk_hash = hashlib.MD5
 ROBOKASSA_TEST_MODE = _clean(os.getenv("ROBOKASSA_TEST_MODE") or "0")  # "1" тест, "0" боевой
 
 # Цена — строго 2 знака
@@ -196,14 +197,22 @@ async def db() -> Any:
              # Автодобавление options=project=... для Supabase pooler (порт 6543)
             if PROJECT_REF:
                 try:
-                    dtmp = conninfo_to_dict(DATABASE_URL)
-                    port_tmp = int(dtmp.get("port") or 0)
-                    opts_tmp = dtmp.get("options") or ""
-                    if port_tmp == 6543 and "project=" not in opts_tmp:
-                        conn_str += ("&" if "?" in conn_str else "?") + f"options=project={PROJECT_REF}"
-                except Exception:
-                    pass
-            try:
+                   # Разбираем и при необходимости добавляем options=project=...
+                parsed = urlparse(conn_str)
+                qs_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+                port = parsed.port
+                has_project = any(
+                    k == "options" and "project=" in v for k, v in qs_pairs
+                )
+                if (
+                    PROJECT_REF
+                    and port == 6543
+                    and not has_project
+                ):
+                    qs_pairs.append(("options", f"project={PROJECT_REF}"))
+                    new_query = urlencode(qs_pairs, doseq=True)
+                    conn_str = urlunparse(parsed._replace(query=new_query))
+
                 d = conninfo_to_dict(conn_str)
                 d.pop("password", None)
                 safe_params = d
@@ -528,7 +537,7 @@ async def list_active_users():
 # ============================ Robokassa logic ============================
 def _sign(s: str) -> str:
     # Возвращаем HEX в нижнем регистре, как в примере Робокассы
-       return hashlib.MD5(s.encode("utf-8")).hexdigest()
+    return hashlib.MD5(s.encode("utf-8")).hexdigest()
 
 
 def sign_success(out_sum, inv_id: int) -> str:
