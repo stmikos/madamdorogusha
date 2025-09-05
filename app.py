@@ -173,6 +173,17 @@ async def init_db():
                     );
                 """))
                 await cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);")
+
+            # logs
+                await cur.execute(dedent("""
+                    CREATE TABLE IF NOT EXISTS logs (
+                        id BIGSERIAL PRIMARY KEY,
+                        created_at TIMESTAMPTZ DEFAULT now(),
+                        tg_id BIGINT,
+                        message TEXT
+                    );
+                """))
+                await cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_tg ON logs(tg_id);")
             await con.commit()
     except Exception as e:
         logger.error("init_db failed: %s", e)
