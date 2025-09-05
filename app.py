@@ -274,8 +274,8 @@ async def list_active_users():
 def _hash_hex(s: str) -> str:
     """HEX в верхнем регистре для совместимости с кабинетом."""
     if ROBOKASSA_SIGNATURE_ALG == "SHA256":
-        return SHA256(s.encode("utf-8")).hexdigest().upper()
-    return MD5(s.encode("utf-8")).hexdigest().upper()
+        return "SHA256"(s.encode("utf-8")).hexdigest().upper()
+    return "MD5"(s.encode("utf-8")).hexdigest().upper()
 
 
 def sign_success(out_sum: float, inv_id: int) -> str:
