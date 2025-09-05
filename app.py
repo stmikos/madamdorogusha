@@ -206,6 +206,11 @@ async def db() -> Any:
                 raise RuntimeError("DB_USER/DB_PASSWORD не заданы в переменных окружения.")
 
             # Для Supabase pooler обязателен sslmode=require, а также options=project=PROJECT_REF
+            if port == 6543 and not PROJECT_REF:
+                raise RuntimeError(
+                    "PROJECT_REF не задан для Supabase pooler (порт 6543). "
+                    "Задайте PROJECT_REF (идентификатор проекта из Supabase) или используйте DB_PORT=5432/DATABASE_URL из панели."
+                )
             options_part = f" options=project={PROJECT_REF}" if PROJECT_REF else ""
             conn_str = (
                 f"host={host} port={port} dbname={name} user={user} password={pwd} sslmode=require" + options_part
@@ -1033,14 +1038,4 @@ async def startup():
     ensure("static/policy.html",
            "<!doctype html><meta charset='utf-8'><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>")
     ensure("static/consent.html",
-           "<!doctype html><meta charset='utf-8'><h1>Согласие на обработку ПДн</h1><p>Открытие фиксируется.</p>")
-    ensure("static/offer.html",
-           "<!doctype html><meta charset='utf-8'><h1>Публичная оферта</h1><p>Открытие фиксируется.</p>")
-
-    # выставляем вебхук
-    try:
-        await set_webhook()
-    except Exception as e:
-        logger.error("set_webhook failed: %s", e)
-
-    # фоновой цикл: на
+           "<!doctype html><meta charset='utf-8'><h1>Согласие на обработку ПДн</h1><p>Открытие фиксиру
