@@ -193,8 +193,18 @@ async def db() -> Any:
     try:
         if DATABASE_URL:
             conn_str = DATABASE_URL
+             # Автодобавление options=project=... для Supabase pooler (порт 6543)
+            if PROJECT_REF:
+                try:
+                    dtmp = conninfo_to_dict(DATABASE_URL)
+                    port_tmp = int(dtmp.get("port") or 0)
+                    opts_tmp = dtmp.get("options") or ""
+                    if port_tmp == 6543 and "project=" not in opts_tmp:
+                        conn_str += ("&" if "?" in conn_str else "?") + f"options=project={PROJECT_REF}"
+                except Exception:
+                    pass
             try:
-                d = conninfo_to_dict(DATABASE_URL)
+                d = conninfo_to_dict(conn_str)
                 d.pop("password", None)
                 safe_params = d
             except Exception:
@@ -224,6 +234,9 @@ async def db() -> Any:
                 safe_params["options"] = f"project={PROJECT_REF}"
 
         return await psycopg.AsyncConnection.connect(conn_str, row_factory=dict_row, connect_timeout=10)
+    except psycopg.OperationalError as e:
+        logger.exception("DB connection failed. params=%s", safe_params)
+        raise RuntimeError(f"Не удалось подключиться к базе данных: {e}") from e
     except Exception as e:
         logger.exception("DB connection failed. params=%s", safe_params)
         raise RuntimeError("Не удалось подключиться к базе данных.") from e
