@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 from textwrap import dedent
 from psycopg.rows import dict_row
-# ===== imports =====
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
-from hashlib import sha256
-from urllib.parse import urlencode, quote_plus
+from hashlib import md5, sha256
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -41,7 +40,7 @@ load_dotenv()
 # Бот / вебхук / сайт
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "Madamgorogusha")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "Madamgorogusha").strip()
 
 # Канал / админ
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0") or 0)
@@ -51,10 +50,8 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
 ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "").strip()
 ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "").strip()
 ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "").strip()
-ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").strip().upper()  # "MD5" или "SHA256"
+ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").strip().upper()  # "MD5" | "SHA256"
 ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0").strip()  # "1" тест, "0" боевой
-
-# Валидируем строго строками, никаких голых идентификаторов
 if ROBOKASSA_SIGNATURE_ALG not in {"MD5", "SHA256"}:
     raise RuntimeError(f"Invalid ROBOKASSA_SIGNATURE_ALG: {ROBOKASSA_SIGNATURE_ALG}")
 
@@ -122,9 +119,8 @@ main_menu = ReplyKeyboardMarkup(
 # ================= DB helpers =================
 async def db() -> psycopg.AsyncConnection:
     """
-    Асинхронное подключение к БД.
-    Если задан DATABASE_URL — используем его (принудительно добавим sslmode=require, если отсутствует).
-    Иначе соберём DSN из полей; добавим sslmode=require и options=project=...
+    Возвращает открытое async-подключение к БД.
+    Использование:  async with await db() as con: ...
     """
     if DATABASE_URL:
         conninfo = DATABASE_URL
@@ -191,16 +187,31 @@ async def init_db():
                 """))
                 await cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_tg ON payments(tg_id);")
 
-                # (необязательно) журнал
+                # аудит: подтверждения
                 await cur.execute(dedent("""
-                    CREATE TABLE IF NOT EXISTS logs (
+                    CREATE TABLE IF NOT EXISTS legal_confirms (
                         id BIGSERIAL PRIMARY KEY,
-                        created_at TIMESTAMPTZ DEFAULT now(),
                         tg_id BIGINT,
-                        message TEXT
+                        token TEXT,
+                        confirmed_at TIMESTAMPTZ DEFAULT now()
                     );
                 """))
-                await cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_tg ON logs(tg_id);")
+                await cur.execute("CREATE INDEX IF NOT EXISTS idx_legal_confirms_tg ON legal_confirms(tg_id);")
+
+                # аудит: просмотры документов (по желанию пользователя)
+                await cur.execute(dedent("""
+                    CREATE TABLE IF NOT EXISTS doc_views (
+                        id BIGSERIAL PRIMARY KEY,
+                        tg_id BIGINT,
+                        token TEXT,
+                        doc_type TEXT,   -- policy|consent|offer
+                        ip TEXT,
+                        user_agent TEXT,
+                        opened_at TIMESTAMPTZ DEFAULT now()
+                    );
+                """))
+                await cur.execute("CREATE INDEX IF NOT EXISTS idx_doc_views_token ON doc_views(token);")
+                await cur.execute("CREATE INDEX IF NOT EXISTS idx_doc_views_tg ON doc_views(tg_id);")
 
             await con.commit()
     except Exception as e:
@@ -271,23 +282,21 @@ async def list_active_users():
 
 
 # ================= Robokassa =================
-def _hash_hex(s: str) -> str:
-    """HEX в верхнем регистре для совместимости с кабинетом."""
-    if ROBOKASSA_SIGNATURE_ALG == "SHA256":
-        return "SHA256"(s.encode("utf-8")).hexdigest().upper()
-    return "MD5"(s.encode("utf-8")).hexdigest().upper()
+_HASHERS = {"MD5": md5, "SHA256": sha256}
 
+def _hash_hex(s: str) -> str:
+    # Всегда UPPERCASE для совместимости с кабинетом Робокассы
+    return _HASHERS[ROBOKASSA_SIGNATURE_ALG](s.encode("utf-8")).hexdigest().upper()
 
 def sign_success(out_sum: float, inv_id: int) -> str:
+    # Подпись для ссылки оплаты
     base = f"{ROBOKASSA_LOGIN}:{out_sum:.2f}:{inv_id}:{ROBOKASSA_PASSWORD1}"
     return _hash_hex(base)
 
-
 def sign_result_from_raw(out_sum_str: str, inv_id: int) -> str:
-    # Для ResultURL берем OutSum РОВНО как пришёл от Robokassa (строкой!)
+    # Для ResultURL берем OutSum РОВНО как пришёл (строкой!)
     base = f"{out_sum_str}:{inv_id}:{ROBOKASSA_PASSWORD2}"
     return _hash_hex(base)
-
 
 def build_pay_url(inv_id: int, out_sum: float, description: str = "Подписка на 30 дней") -> str:
     params = {
@@ -298,11 +307,11 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture": "ru",
         "Encoding": "utf-8",
-        "IsTest": "0" if ROBOKASSA_TEST_MODE == "0" else "0",
+        "IsTest": "1" if ROBOKASSA_TEST_MODE == "1" else "0",
     }
-    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params, encoding='utf-8', quote_via=quote_plus)
-    safe_log_params = {k: v for k, v in params.items() if k != "SignatureValue"}
-    logger.info("[RK DEBUG] %s", safe_log_params)
+    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
+    safe = {k: v for k, v in params.items() if k != "SignatureValue"}
+    logger.info("[RK DEBUG] %s", safe)
     return url
 
 
@@ -322,7 +331,10 @@ async def new_payment(tg_id: int, out_sum: float) -> int:
 async def set_payment_paid(inv_id: int):
     async with await db() as con:
         async with con.cursor() as cur:
-            await cur.execute("UPDATE payments SET status='paid', paid_at=%s WHERE inv_id=%s", (now_ts(), inv_id))
+            await cur.execute(
+                "UPDATE payments SET status='paid', paid_at=%s WHERE inv_id=%s",
+                (now_ts(), inv_id)
+            )
         await con.commit()
 
 
@@ -334,13 +346,18 @@ def pay_kb(url: str) -> InlineKeyboardMarkup:
 
 # ================= Документы =================
 def legal_keyboard(token: str) -> InlineKeyboardMarkup:
+    """Только кнопка подтверждения — без обязательного открытия ссылок."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✔️ Подтвердить ознакомление", callback_data=f"legal_agree:{token}")]
+    ])
+
+def docs_keyboard(token: str) -> InlineKeyboardMarkup:
+    """Ссылки на документы — по желанию пользователя."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📄 Политика конфиденциальности", url=f"{BASE_URL}/policy/{token}")],
         [InlineKeyboardButton(text="✅ Согласие на обработку данных", url=f"{BASE_URL}/consent/{token}")],
         [InlineKeyboardButton(text="📑 Публичная оферта", url=f"{BASE_URL}/offer/{token}")],
-        [InlineKeyboardButton(text="✔️ Я ознакомился(лась)", callback_data=f"legal_agree:{token}")],
     ])
-
 
 async def get_or_make_token(tg_id: int) -> str:
     u = await get_user(tg_id)
@@ -349,7 +366,6 @@ async def get_or_make_token(tg_id: int) -> str:
     token = secrets.token_urlsafe(16)
     await upsert_user(tg_id, policy_token=token, status="new")
     return token
-
 
 async def _legal_ok(tg_id: int) -> bool:
     try:
@@ -369,16 +385,14 @@ async def on_start(message: Message):
     token = await get_or_make_token(message.from_user.id)
     txt = (
         "👋 Добро пожаловать!\n\n"
-        "1) Откройте три документа ниже (по кнопкам)\n"
-        "2) Нажмите «✔️ Я ознакомился(лась)»\n"
-        "3) Затем оплатите подписку"
+        "Нажмите «✔️ Подтвердить ознакомление», чтобы продолжить.\n"
+        "Документы доступны в меню «📄 Документы»."
     )
     try:
         await message.answer_photo(FSInputFile(WELCOME_IMAGE_PATH), caption=txt, reply_markup=legal_keyboard(token))
     except Exception:
         await message.answer(txt, reply_markup=legal_keyboard(token))
     await message.answer("Меню ниже 👇", reply_markup=main_menu)
-
 
 @dp.message(Command("help"))
 async def on_help(message: Message):
@@ -390,49 +404,47 @@ async def on_help(message: Message):
         "/help — помощь"
     )
 
-
 @dp.message(F.text == "📄 Документы")
 @dp.message(Command("docs"))
 async def on_docs(message: Message):
     token = await get_or_make_token(message.from_user.id)
-    await message.answer("Документы:", reply_markup=legal_keyboard(token))
-
+    await message.answer("Полезные документы:", reply_markup=docs_keyboard(token))
 
 @dp.callback_query(F.data.startswith("legal_agree:"))
 async def on_legal_agree(cb: CallbackQuery):
     token = cb.data.split(":", 1)[1]
-    # 1) Находим пользователя по токену
+
+    # кто жмёт подтверждение
     async with await db() as con:
         async with con.cursor() as cur:
-            await cur.execute("""
-                SELECT tg_id, policy_viewed_at, consent_viewed_at, offer_viewed_at
-                FROM users WHERE policy_token=%s
-            """, (token,))
+            await cur.execute("SELECT tg_id FROM users WHERE policy_token=%s", (token,))
             row = await cur.fetchone()
 
     if not row:
         await cb.answer("Сессия не найдена. Нажмите /start", show_alert=True)
         return
 
-    # 2) Проверяем отметки: все три должны быть не NULL
-    if not (row.get("policy_viewed_at") and row.get("consent_viewed_at") and row.get("offer_viewed_at")):
-        await cb.answer("Пожалуйста, откройте все три документа (Политика, Согласие, Оферта).", show_alert=True)
-        return
+    tg_id = row["tg_id"]
 
-    # 3) Фиксируем согласие и выдаём оплату
+    # фиксируем согласие + аудит
     async with await db() as con:
         async with con.cursor() as cur:
             await cur.execute(
                 "UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
-                (now_ts(), "legal_ok", row["tg_id"])
+                (now_ts(), "legal_ok", tg_id),
+            )
+            await cur.execute(
+                "INSERT INTO legal_confirms(tg_id, token, confirmed_at) VALUES (%s,%s,%s)",
+                (tg_id, token, now_ts()),
             )
         await con.commit()
 
-    inv_id = await new_payment(row["tg_id"], PRICE_RUB)
+    # создаём платёж и выдаём ссылку
+    inv_id = await new_payment(tg_id, PRICE_RUB)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
+
     await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
     await cb.answer()
-
 
 @dp.message(F.text == "💳 Оплатить подписку")
 @dp.message(Command("pay"))
@@ -440,7 +452,10 @@ async def on_pay(message: Message):
     tg_id = message.from_user.id
     if not await _legal_ok(tg_id):
         token = await get_or_make_token(tg_id)
-        await message.answer("Сначала ознакомьтесь с документами и подтвердите согласие:", reply_markup=legal_keyboard(token))
+        await message.answer(
+            "Сначала подтвердите ознакомление:",
+            reply_markup=legal_keyboard(token)
+        )
         return
 
     try:
@@ -451,11 +466,9 @@ async def on_pay(message: Message):
         logger.error("/pay failed: %s", e)
         await message.answer("⚠️ Временно недоступно. Попробуйте позже.")
 
-
 def bar(progress: float, width: int = 20) -> str:
     filled = int(round(progress * width))
     return "▮" * filled + "▯" * (width - filled)
-
 
 @dp.message(F.text == "📊 Мой статус")
 @dp.message(Command("stats"))
@@ -488,13 +501,11 @@ async def on_stats(message: Message):
     )
     await message.answer(text, parse_mode="Markdown")
 
-
 @dp.message(F.text & ~F.text.regexp(r"^/"))
 async def on_text(message: Message):
     await message.answer("Напишите /help для списка команд.")
 
-
-# ======= Документные страницы (фиксируют просмотр) =======
+# ======= Документные страницы (не обязательны; фиксируем просмотры) =======
 def _read_html(path: str) -> str:
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -502,44 +513,76 @@ def _read_html(path: str) -> str:
     except FileNotFoundError:
         return "<h2>файл не найден</h2>"
 
-
 @app.get("/policy/{token}", response_class=HTMLResponse)
-async def policy_with_token(token: str):
+async def policy_with_token(token: str, request: Request):
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent", "")
     try:
         async with await db() as con:
             async with con.cursor() as cur:
-                await cur.execute("UPDATE users SET policy_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
+                await cur.execute(
+                    "UPDATE users SET policy_viewed_at=%s WHERE policy_token=%s",
+                    (now_ts(), token),
+                )
+                await cur.execute(
+                    """
+                    INSERT INTO doc_views(tg_id, token, doc_type, ip, user_agent)
+                    SELECT tg_id, %s, %s, %s, %s FROM users WHERE policy_token=%s
+                    """,
+                    (token, "policy", ip, ua, token),
+                )
             await con.commit()
     except Exception as e:
         logger.error("policy update failed: %s", e)
     return HTMLResponse(_read_html("static/policy.html"))
 
-
 @app.get("/consent/{token}", response_class=HTMLResponse)
-async def consent_with_token(token: str):
+async def consent_with_token(token: str, request: Request):
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent", "")
     try:
         async with await db() as con:
             async with con.cursor() as cur:
-                await cur.execute("UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
+                await cur.execute(
+                    "UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s",
+                    (now_ts(), token),
+                )
+                await cur.execute(
+                    """
+                    INSERT INTO doc_views(tg_id, token, doc_type, ip, user_agent)
+                    SELECT tg_id, %s, %s, %s, %s FROM users WHERE policy_token=%s
+                    """,
+                    (token, "consent", ip, ua, token),
+                )
             await con.commit()
     except Exception as e:
         logger.error("consent update failed: %s", e)
     return HTMLResponse(_read_html("static/consent.html"))
 
-
 @app.get("/offer/{token}", response_class=HTMLResponse)
-async def offer_with_token(token: str):
+async def offer_with_token(token: str, request: Request):
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent", "")
     try:
         async with await db() as con:
             async with con.cursor() as cur:
-                await cur.execute("UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
+                await cur.execute(
+                    "UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s",
+                    (now_ts(), token),
+                )
+                await cur.execute(
+                    """
+                    INSERT INTO doc_views(tg_id, token, doc_type, ip, user_agent)
+                    SELECT tg_id, %s, %s, %s, %s FROM users WHERE policy_token=%s
+                    """,
+                    (token, "offer", ip, ua, token),
+                )
             await con.commit()
     except Exception as e:
         logger.error("offer update failed: %s", e)
     return HTMLResponse(_read_html("static/offer.html"))
 
-
-# Plain-страницы для ручной проверки (без фиксации)
+# Plain-страницы
 @app.get("/policy", response_class=HTMLResponse)
 def policy_plain():
     return HTMLResponse(_read_html("static/policy.html"))
@@ -552,32 +595,24 @@ def consent_plain():
 def offer_plain():
     return HTMLResponse(_read_html("static/offer.html"))
 
-
 # ======= Robokassa callbacks =======
 class RobokassaResult(BaseModel):
     OutSum: float
     InvId: int
     SignatureValue: str
 
-
 def _eq_ci(a: str, b: str) -> bool:
     return (a or "").lower() == (b or "").lower()
-
 
 @app.post("/pay/result")
 async def pay_result(request: Request):
     data = dict(await request.form())
     try:
-        out_sum_raw = data.get("OutSum")              # <-- строка как есть!
+        out_sum_raw = (data.get("OutSum") or "").strip()  # строка как есть!
         inv_id = int(data.get("InvId"))
         sig = (data.get("SignatureValue") or "").strip()
     except Exception:
         raise HTTPException(400, "Bad payload")
-
-    expected = sign_result_from_raw(out_sum_raw, inv_id)
-    if sig.lower() != expected.lower():
-        # ...
-        raise HTTPException(403, "Invalid signature")
 
     expected = sign_result_from_raw(out_sum_raw, inv_id)
     if not _eq_ci(sig, expected):
@@ -623,16 +658,13 @@ async def pay_result(request: Request):
 
     return PlainTextResponse(f"OK{inv_id}")
 
-
 @app.get("/pay/success")
 def pay_success():
     return HTMLResponse("<h2>Спасибо! Оплата прошла. Вернитесь в Telegram — приглашение уже ждёт вас в боте.</h2>")
 
-
 @app.get("/pay/fail")
 def pay_fail():
     return HTMLResponse("<h2>Оплата не завершена. Вы можете повторить попытку в боте.</h2>")
-
 
 # ======= Webhook & startup =======
 @app.post(f"/telegram/webhook/{WEBHOOK_SECRET}")
@@ -644,7 +676,6 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
-
 async def set_webhook():
     if not bot:
         logger.warning("BOT_TOKEN не задан — вебхук не установлен")
@@ -654,12 +685,10 @@ async def set_webhook():
         return
     await bot.set_webhook(f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}")
 
-
 def ensure(path: str, content: str):
     if not os.path.exists(path):
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-
 
 @app.on_event("startup")
 async def startup():
@@ -668,7 +697,6 @@ async def startup():
     except Exception as e:
         logger.error("startup init_db error: %s", e)
 
-    # Автосоздание файлов документов
     ensure("static/policy.html",
            "<!doctype html><meta charset='utf-8'><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>")
     ensure("static/consent.html",
@@ -687,7 +715,6 @@ async def startup():
 
     global loop_task
     loop_task = asyncio.create_task(loop())
-
 
 @app.on_event("shutdown")
 async def shutdown():
