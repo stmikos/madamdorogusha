@@ -5,7 +5,7 @@ from psycopg.rows import dict_row
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import md5, sha256
-from urllib.parse import urlencode, quote
+from urllib.parse import urlencode, quote_plus
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -106,18 +106,20 @@ main_menu = ReplyKeyboardMarkup(
         [KeyboardButton(text="📄 Документы")],
         [KeyboardButton(text="📊 Мой статус")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
-async db():
+async def db():
     if DATABASE_URL:
-       return await psycopg.AsyncConnection.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
+       return await psycopg.AsyncConnection.connect(
+            DATABASE_URL, row_factory=dict_row, connect_timeout=10
+        )
     host = DB_HOST or "aws-1-eu-north-1.pooler.supabase.com"
-    port = str(DB_PORT or "5432")
+    port = str(DB_PORT or "6543")
     name = DB_NAME or "postgres"
     if not DB_USER or not DB_PASSWORD:
+        raise RuntimeError("DB_USER and DB_PASSWORD must be set")
 
-       raise RuntimeError("DB_USER and DB_PASSWORD must be set")
     dsn = f"postgresql://{DB_USER}:{DB_PASSWORD}@{host}:{port}/{name}"
     return await psycopg.AsyncConnection.connect(dsn, row_factory=dict_row, connect_timeout=10)
 
@@ -181,32 +183,41 @@ async def upsert_user(tg_id: int, **kwargs):
     try:
         reserved = {"tg_id", "created_at", "updated_at"}
         data = {k: v for k, v in kwargs.items() if k not in reserved}
-        row = await(tg_id)
+        row = await get_user(tg_id)
         if row is None:
             cols = ["tg_id", "created_at", "updated_at"] + list(data.keys())
             vals = [tg_id, now_ts(), now_ts()] + list(data.values())
             ph = ["%s"] * len(cols)
-             async with await db() as con:
+            async with await db() as con:
                 async with con.cursor() as cur:
-                    await cur.execute(f"INSERT INTO users({','.join(cols)}) VALUES({','.join(ph)})", tuple(vals))
+                    await cur.execute(
+                        f"INSERT INTO users({','.join(cols)}) VALUES({','.join(ph)})",
+                        tuple(vals),
+                    )
                 await con.commit()
         else:
             if data:
                 sets = [f"{k}=%s" for k in data] + ["updated_at=%s"]
                 vals = list(data.values()) + [now_ts(), tg_id]
-               async with await db() as con:
+                async with await db() as con:
                     async with con.cursor() as cur:
-                        await cur.execute(f"UPDATE users SET {', '.join(sets)} WHERE tg_id=%s", tuple(vals))
+                        await cur.execute(
+                            f"UPDATE users SET {', '.join(sets)} WHERE tg_id=%s",
+                            tuple(vals),
+                        )
                     await con.commit()
             else: 
-    async with await db() as con:
+                async with await db() as con:
                     async with con.cursor() as cur:
-                        await cur.execute("UPDATE users SET updated_at=%s WHERE tg_id=%s", (now_ts(), tg_id))
+                        await cur.execute(
+                            "UPDATE users SET updated_at=%s WHERE tg_id=%s",
+                            (now_ts(), tg_id),
+                        )
                     await con.commit()
     except Exception as e:
         logger.error(f"upsert_user failed: {e}")
 
-async list_active_users():
+async def list_active_users():
     try:
         async with await db() as con:
             async with con.cursor() as cur:
@@ -241,7 +252,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "Encoding": "utf-8",
         "IsTest": "0" if ROBOKASSA_TEST_MODE == "0" else "0",
     }
-    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
+    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params, encoding='utf-8', quote_via=quote_plus)
     safe_log_params = {k: v for k, v in params.items() if k != "SignatureValue"}
     logger.info(f"[RK DEBUG] {safe_log_params}")
     return url
@@ -279,7 +290,7 @@ def legal_keyboard(token: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="✔️ Я ознакомился(лась)", callback_data=f"legal_agree:{token}")],
     ])
 
-async get_or_make_token(tg_id: int) -> str:
+async def get_or_make_token(tg_id: int) -> str:
     u = await get_user(tg_id)
     if u and u.get("policy_token"):
         return u["policy_token"]
@@ -335,12 +346,15 @@ async def on_docs(message: Message):
 async def on_legal_agree(cb: CallbackQuery):
     token = cb.data.split(":", 1)[1]
     # 1) Находим пользователя по токену
-   async with await db() as con:
+    async with await db() as con:
         async with con.cursor() as cur:
-            await cur.execute("""
+           await cur.execute(
+                """
                 SELECT tg_id, policy_viewed_at, consent_viewed_at, offer_viewed_at
                 FROM users WHERE policy_token=%s
-            """, (token,))
+                """,
+                (token,),
+            )
             row = await cur.fetchone()
 
     if not row:
