@@ -81,6 +81,10 @@ ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA2
 if ROBOKASSA_SIGNATURE_ALG not in {"MD5", "SHA256"}:
     logger.error("ROBOKASSA_SIGNATURE_ALG must be 'MD5' or 'SHA256', got %s", ROBOKASSA_SIGNATURE_ALG)
     raise RuntimeError("Invalid ROBOKASSA_SIGNATURE_ALG")
+if ROBOKASSA_SIGNATURE_ALG == "SHA256":
+    _rk_hash = hashlib.sha256
+else:
+    _rk_hash = hashlib.md5
 ROBOKASSA_TEST_MODE = _clean(os.getenv("ROBOKASSA_TEST_MODE") or "0")  # "1" тест, "0" боевой
 
 # Цена — строго 2 знака
@@ -526,7 +530,7 @@ def sign_result_from_raw(out_sum_str: str, inv_id: int) -> str:
     # OutSum берём как пришёл от Робокассы (строкой), без форматирования
     base = f"{out_sum_str}:{inv_id}:{ROBOKASSA_PASSWORD2}"
     logger.info("RK base(result) %s", base.replace(ROBOKASSA_PASSWORD2, "***"))
-    return _sign(base)
+    return _rk_hash(s.encode("utf-8")).hexdigest()
 
 
 def sign_success_from_raw(out_sum_str: str, inv_id: int) -> str:
