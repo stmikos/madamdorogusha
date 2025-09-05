@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from textwrap import dedent
 from psycopg.rows import dict_row
+from contextlib import asynccontextmanager
 # ===== imports =====
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
@@ -109,19 +110,26 @@ main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+@asynccontextmanager
 async def db():
-    if DATABASE_URL:
-       return await psycopg.AsyncConnection.connect(
-            DATABASE_URL, row_factory=dict_row, connect_timeout=10
+    dsn = DATABASE_URL
+    if not dsn:
+        host = DB_HOST or "aws-1-eu-north-1.pooler.supabase.com"
+        port = str(DB_PORT or "6543")
+        name = DB_NAME or "postgres"
+        if not DB_USER or not DB_PASSWORD:
+            raise RuntimeError("DB_USER and DB_PASSWORD must be set")
+        dsn = f"postgresql://{DB_USER}:{DB_PASSWORD}@{host}:{port}/{name}"
+    if PROJECT_REF:
+        sep = '&' if '?' in dsn else '?'
+        dsn = f"{dsn}{sep}options=project={PROJECT_REF}"
+        conn = await psycopg.AsyncConnection.connect(
+            dsn, row_factory=dict_row, connect_timeout=10
         )
-    host = DB_HOST or "aws-1-eu-north-1.pooler.supabase.com"
-    port = str(DB_PORT or "6543")
-    name = DB_NAME or "postgres"
-    if not DB_USER or not DB_PASSWORD:
-        raise RuntimeError("DB_USER and DB_PASSWORD must be set")
-
-    dsn = f"postgresql://{DB_USER}:{DB_PASSWORD}@{host}:{port}/{name}"
-    return await psycopg.AsyncConnection.connect(dsn, row_factory=dict_row, connect_timeout=10)
+    try:
+        yield conn
+    finally:
+        await conn.close
 
 async def init_db():
 
@@ -171,7 +179,7 @@ async def init_db():
 
 async def get_user(tg_id: int):
     try:
-        async with await db() as con:
+        async with db() as con:
             async with con.cursor() as cur:
                 await cur.execute("SELECT * FROM users WHERE tg_id=%s", (tg_id,))
                 return await cur.fetchone()
@@ -188,7 +196,7 @@ async def upsert_user(tg_id: int, **kwargs):
             cols = ["tg_id", "created_at", "updated_at"] + list(data.keys())
             vals = [tg_id, now_ts(), now_ts()] + list(data.values())
             ph = ["%s"] * len(cols)
-            async with await db() as con:
+            async with db() as con:
                 async with con.cursor() as cur:
                     await cur.execute(
                         f"INSERT INTO users({','.join(cols)}) VALUES({','.join(ph)})",
@@ -199,7 +207,7 @@ async def upsert_user(tg_id: int, **kwargs):
             if data:
                 sets = [f"{k}=%s" for k in data] + ["updated_at=%s"]
                 vals = list(data.values()) + [now_ts(), tg_id]
-                async with await db() as con:
+                async with db() as con:
                     async with con.cursor() as cur:
                         await cur.execute(
                             f"UPDATE users SET {', '.join(sets)} WHERE tg_id=%s",
@@ -207,7 +215,7 @@ async def upsert_user(tg_id: int, **kwargs):
                         )
                     await con.commit()
             else: 
-                async with await db() as con:
+                async with db() as con:
                     async with con.cursor() as cur:
                         await cur.execute(
                             "UPDATE users SET updated_at=%s WHERE tg_id=%s",
@@ -277,7 +285,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
     return url
 
 async def new_payment(tg_id: int, out_sum: float) -> int:
-    async with await db() as con:
+    async with db() as con:
         async with con.cursor() as cur:
             await cur.execute(
                 "INSERT INTO payments(tg_id, out_sum, status, created_at) VALUES(%s,%s,%s,%s) RETURNING inv_id",
@@ -290,7 +298,7 @@ async def new_payment(tg_id: int, out_sum: float) -> int:
 
 
 async def set_payment_paid(inv_id: int):
-    async with await db() as con:
+    async with db() as con:
         async with con.cursor() as cur:
             await cur.execute("UPDATE payments SET status='paid', paid_at=%s WHERE inv_id=%s", (now_ts(), inv_id))
         await con.commit()
@@ -318,9 +326,9 @@ async def get_or_make_token(tg_id: int) -> str:
     return token
 
 
-async _legal_ok(tg_id: int) -> bool:
+async def _legal_ok(tg_id: int) -> bool:
     try:
-        async with await db() as con:
+        async await db() as con:
             async with con.cursor() as cur:
                 await cur.execute("SELECT legal_confirmed_at FROM users WHERE tg_id=%s", (tg_id,))
                 r = await cur.fetchone()
@@ -365,9 +373,9 @@ async def on_docs(message: Message):
 async def on_legal_agree(cb: CallbackQuery):
     token = cb.data.split(":", 1)[1]
     # 1) Находим пользователя по токену
-    async with await db() as con:
+    async with db() as con:
         async with con.cursor() as cur:
-           await cur.execute(
+            await cur.execute(
                 """
                 SELECT tg_id, policy_viewed_at, consent_viewed_at, offer_viewed_at
                 FROM users WHERE policy_token=%s
@@ -386,7 +394,7 @@ async def on_legal_agree(cb: CallbackQuery):
         return
 
     # 3) Фиксируем согласие и выдаём оплату
-    async with await db() as con:
+    async with db() as con:
         async with con.cursor() as cur:
             await cur.execute("UPDATE users SET legal_confirmed_at=%s, status=%s WHERE tg_id=%s",
                         (now_ts(), "legal_ok", row["tg_id"]))
@@ -469,7 +477,7 @@ def _read_html(path: str) -> HTMLResponse:
 @app.get("/policy/{token}", response_class=HTMLResponse)
 async def policy_with_token(token: str):
     try:
-        async with await db() as con:
+        async with db() as con:
             async with con.cursor() as cur:
                 await cur.execute("UPDATE users SET policy_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
             await con.commit()
@@ -480,7 +488,7 @@ async def policy_with_token(token: str):
 @app.get("/consent/{token}", response_class=HTMLResponse)
 async def consent_with_token(token: str):
     try:
-       async with await db() as con:
+       async with db() as con:
             async with con.cursor() as cur:
                 await cur.execute("UPDATE users SET consent_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
             await con.commit()
@@ -491,7 +499,7 @@ async def consent_with_token(token: str):
 @app.get("/offer/{token}", response_class=HTMLResponse)
 async def offer_with_token(token: str):
     try:
-        async with await db() as con:
+        async with db() as con:
             async with con.cursor() as cur:
                 await cur.execute("UPDATE users SET offer_viewed_at=%s WHERE policy_token=%s", (now_ts(), token))
             await con.commit()
@@ -535,7 +543,7 @@ async def pay_result(request: Request):
     expected = sign_result(out_sum, inv_id)
     if not _eq_ci(sig, expected):
         try:
-            async with await db() as con:
+            async with db() as con:
                 async with con.cursor() as cur:
                     await cur.execute("UPDATE payments SET status='failed' WHERE inv_id=%s", (inv_id,))
                 await con.commit()
@@ -544,7 +552,7 @@ async def pay_result(request: Request):
         raise HTTPException(403, "Invalid signature")
 
     await set_payment_paid(inv_id)
-    async with await db() as con:
+    async with db() as con:
         async with con.cursor() as cur:
             await cur.execute("SELECT tg_id FROM payments WHERE inv_id=%s", (inv_id,))
             row = await cur.fetchone()
@@ -613,7 +621,7 @@ async def startup():
         await init_db()
     except Exception as e:
         logger.error("startup init_db error: %s", e)
-        # Автосоздание файлов документов
+    # Автосоздание файлов документов
     ensure("static/policy.html",
            """<!doctype html><meta charset="utf-8"><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>""")
     ensure("static/consent.html",
