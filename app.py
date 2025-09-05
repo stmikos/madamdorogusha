@@ -51,7 +51,9 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
 ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "").strip()
 ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "").strip()
 ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "").strip()
-ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").upper()  # MD5|SHA256
+ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").strip().upper()
+if ROBOKASSA_SIGNATURE_ALG not in ("MD5", "SHA256"):
+    raise RuntimeError(f"Invalid ROBOKASSA_SIGNATURE_ALG: {ROBOKASSA_SIGNATURE_ALG}")
 ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0").strip()  # "1" тест, "0" боевой
 
 PRICE_RUB = float(os.getenv("PRICE_RUB", "10"))
