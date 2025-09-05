@@ -26,6 +26,9 @@
 - `SUBSCRIPTION_DAYS`
 - `DATABASE_URL` (или `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `PROJECT_REF`)
 
+Пример `DATABASE_URL` для пула Supabase:  
+`postgresql://postgres:password@db.supabase.co:6543/postgres?sslmode=require&options=project=<PROJECT_REF>
+
 ## Схема БД
 Таблицы `users`, `payments`, `logs` создаются автоматически при старте (init_db).
 `logs` хранит `id`, `created_at`, `tg_id`, `message` и индекс по `tg_id`.
