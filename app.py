@@ -51,7 +51,7 @@ ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "").strip()
 ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").upper()  # MD5|SHA256
 ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0")  # "1" тест, "0" боевой
 
-PRICE_RUB = float(os.getenv("PRICE_RUB", "289"))
+PRICE_RUB = float(os.getenv("PRICE_RUB", "10"))
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
 
 # БД: можно или одной строкой, или полями (для PgBouncer 6543)
@@ -242,6 +242,12 @@ def sign_result(out_sum: float, inv_id: int) -> str:
     return _sign(base)
 
 def build_pay_url(inv_id: int, out_sum: float, description: str = "Подписка на 30 дней") -> str:
+    print(f"!!! in build_pay_url()")
+    print(f"!!! inv_id={inv_id}")
+    print(f"!!! description={description}")
+    print(f"!!! ROBOKASSA_LOGIN={ROBOKASSA_LOGIN}")
+    print(f"!!! out_sum={out_sum}")
+    
     params = {
         "MerchantLogin": ROBOKASSA_LOGIN,
         "OutSum": f"{out_sum:.2f}",
@@ -252,8 +258,21 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "Encoding": "utf-8",
         "IsTest": "0" if ROBOKASSA_TEST_MODE == "0" else "0",
     }
-    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params, encoding='utf-8', quote_via=quote_plus)
+
+    print(f'!!! params["MerchantLogin"]={params["MerchantLogin"]}')
+    print(f'!!! params["OutSum"]={params["OutSum"]}')
+    print(f'!!! params["InvId"]={params["InvId"]}')
+    print(f'!!! params["Description"]={params["Description"]}')
+    print(f'!!! params["SignatureValue"]={params["SignatureValue"]}')
+    print(f'!!! params["Culture"]={params["Culture"]}')
+    print(f'!!! params["Encoding"]={params["Encoding"]}')
+    print(f'!!! params["IsTest"]={params["IsTest"]}')
+
+    print(f'!!! urlencode(params)={urlencode(params)}')
+    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
+    print(f'!!! url={url}')
     safe_log_params = {k: v for k, v in params.items() if k != "SignatureValue"}
+    print(f'!!! safe_log_params={safe_log_params}')
     logger.info(f"[RK DEBUG] {safe_log_params}")
     return url
 
