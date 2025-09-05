@@ -323,8 +323,8 @@ async def list_active_users():
 def _sign(s: str) -> str:
     # Возвращаем HEX в нижнем регистре, как в примере Робокассы
     if ROBOKASSA_SIGNATURE_ALG == "SHA256":
-        return hashlib.md5(s.encode("utf-8")).hexdigest()
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+        return hashlib.SHA256(s.encode("utf-8")).hexdigest()
+    return hashlib.MD5(s.encode("utf-8")).hexdigest()
 
 def sign_success(out_sum, inv_id: int) -> str:
     base = f"{ROBOKASSA_LOGIN}:{money2(out_sum)}:{inv_id}:{ROBOKASSA_PASSWORD1}"
