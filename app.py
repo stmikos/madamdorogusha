@@ -606,6 +606,15 @@ async def set_payment_paid(inv_id: int):
             )
             await con.commit()
 
+async def set_payment_failed(inv_id: int):
+    async with await db() as con:
+        async with con.cursor() as cur:
+            await cur.execute(
+                "UPDATE payments SET status='failed' WHERE inv_id=%s",
+                (inv_id,),
+            )
+            await con.commit()
+
 
 def pay_kb(url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -906,7 +915,7 @@ def offer_plain():
 
 # ======================== Robokassa callbacks ========================
 class RobokassaResult(BaseModel):
-    OutSum: float
+    OutSum: str
     InvId: int
     SignatureValue: str
 
@@ -927,4 +936,54 @@ async def pay_result(request: Request):
 
     expected = sign_result_from_raw(out_sum_raw, inv_id)
     if not _eq_ci(sig, expected):
+        logger.error(
+            "pay_result signature mismatch: expected=%s got=%s inv_id=%s",
+            expected,
+            sig,
+            inv_id,
+        )
         try:
+            await set_payment_failed(inv_id)
+        except Exception as e:
+            logger.error("set_payment_failed failed: %s", e)
+            raise HTTPException(500)
+        raise HTTPException(400)
+    try:
+        await set_payment_paid(inv_id)
+    except Exception as e:
+        logger.error("set_payment_paid failed: %s", e)
+        raise HTTPException(500)
+    return PlainTextResponse("OK")
+
+
+@app.get("/pay/success", response_class=HTMLResponse)
+async def pay_success(request: Request):
+    params = request.query_params
+    try:
+        out_sum_raw = params.get("OutSum")
+        inv_id = int(params.get("InvId"))
+        sig = params.get("SignatureValue") or ""
+    except Exception:
+        raise HTTPException(400, "Bad redirect")
+
+    expected = sign_success_from_raw(out_sum_raw, inv_id)
+    if not _eq_ci(sig, expected):
+        raise HTTPException(400, "Bad signature")
+
+    return HTMLResponse(f"<h3>Оплата успешна. Номер заказа: {inv_id}</h3>")
+
+
+@app.get("/pay/fail", response_class=HTMLResponse)
+async def pay_fail(request: Request):
+    params = request.query_params
+    try:
+        out_sum_raw = params.get("OutSum")
+        inv_id = int(params.get("InvId"))
+        sig = params.get("SignatureValue") or ""
+        expected = sign_success_from_raw(out_sum_raw, inv_id)
+        if not _eq_ci(sig, expected):
+            logger.warning("Fail redirect signature mismatch for InvId=%s", inv_id)
+    except Exception:
+        logger.warning("Fail redirect parsing error")
+
+    return HTMLResponse("<h3>Оплата не прошла. Попробуйте снова.</h3>")
