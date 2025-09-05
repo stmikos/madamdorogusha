@@ -1,3 +1,4 @@
+# app.py
 # -*- coding: utf-8 -*-
 from textwrap import dedent
 import os, re, asyncio, logging, secrets, hashlib
@@ -18,7 +19,7 @@ from aiogram.types import (
     Message, CallbackQuery, Update,
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton,
-    FSInputFile, ErrorEvent
+    FSInputFile
 )
 
 # NOTE: psycopg (libpq) импортируем лениво внутри db(), чтобы приложение не падало,
@@ -52,6 +53,19 @@ def now_ts() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _hash_hex(s: str) -> str:
+    """MD5/SHA256 в HEX нижним регистром в зависимости от ROBOKASSA_SIGNATURE_ALG."""
+    if ROBOKASSA_SIGNATURE_ALG == "SHA256":
+        return hashlib.sha256(s.encode("utf-8")).hexdigest()
+    return hashlib.md5(s.encode("utf-8")).hexdigest()
+
+
+def _calc_extended_valid_until(old_vu: Optional[datetime], now_: datetime, days: int) -> datetime:
+    """Продление от максимума(now, old_vu) на days."""
+    base = old_vu if (old_vu and old_vu > now_) else now_
+    return base + timedelta(days=days)
+
+
 # =============== logging ===============
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
@@ -60,7 +74,7 @@ logger = logging.getLogger("app")
 # =============== env ===============
 load_dotenv()
 
-def _clean(v: str | None) -> str:
+def _clean(v: Optional[str]) -> str:
     # убираем пробелы и случайные кавычки вокруг
     return (v or "").strip().strip('"').strip("'")
 
@@ -71,7 +85,7 @@ WEBHOOK_SECRET = _clean(os.getenv("WEBHOOK_SECRET") or "secret")
 
 # Канал / админ
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0") or 0)
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
+ADMIN_USER_ID = (int(os.getenv("ADMIN_USER_ID", "0") or 0) or None)
 
 # Robokassa
 ROBOKASSA_LOGIN = _clean(os.getenv("ROBOKASSA_LOGIN"))
@@ -81,18 +95,13 @@ ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA2
 if ROBOKASSA_SIGNATURE_ALG not in {"MD5", "SHA256"}:
     logger.error("ROBOKASSA_SIGNATURE_ALG must be 'MD5' or 'SHA256', got %s", ROBOKASSA_SIGNATURE_ALG)
     raise RuntimeError("Invalid ROBOKASSA_SIGNATURE_ALG")
-    
-if ROBOKASSA_SIGNATURE_ALG == "SHA256":
-    _rk_hash = hashlib.SHA256
-else:
-    _rk_hash = hashlib.MD5
+
 ROBOKASSA_TEST_MODE = _clean(os.getenv("ROBOKASSA_TEST_MODE") or "0")  # "1" тест, "0" боевой
 
 # Цена — строго 2 знака
 PRICE_RUB = Decimal(_clean(os.getenv("PRICE_RUB") or "10.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
 REMIND_DAYS_BEFORE = int(os.getenv("REMIND_DAYS_BEFORE", "3"))
-
 
 def money2(x) -> str:
     # безопасно приводим к Decimal и фиксируем ДВЕ цифры
@@ -137,17 +146,17 @@ if not BOT_TOKEN or not BASE_URL:
     logger.warning("⚠️ BOT_TOKEN и/или BASE_URL не заданы — проверь .env")
 bot = Bot(BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
-loop_task: asyncio.Task | None = None
+loop_task: Optional[asyncio.Task] = None
 
 
 @dp.errors()
-async def on_aiogram_error(event: ErrorEvent):
-    logger.exception("Aiogram handler error", exc_info=event.exception)
+async def on_aiogram_error(event):
+    logger.exception("Aiogram handler error", exc_info=event.exception if hasattr(event, "exception") else None)
     if ADMIN_USER_ID and bot:
         try:
             await bot.send_message(
                 ADMIN_USER_ID,
-                f"⚠️ Ошибка: {type(event.exception).__name__}\n{event.exception}"
+                f"⚠️ Ошибка: {getattr(event, 'exception', None)}"
             )
         except Exception:
             pass
@@ -194,30 +203,30 @@ async def db() -> Any:
     try:
         if DATABASE_URL:
             conn_str = DATABASE_URL
-             # Автодобавление options=project=... для Supabase pooler (порт 6543)
+            # Автодобавление options=project=... для Supabase pooler (порт 6543)
             if PROJECT_REF:
                 try:
-                   # Разбираем и при необходимости добавляем options=project=...
-                parsed = urlparse(conn_str)
-                qs_pairs = parse_qsl(parsed.query, keep_blank_values=True)
-                port = parsed.port
-                has_project = any(
-                    k == "options" and "project=" in v for k, v in qs_pairs
-                )
-                if (
-                    PROJECT_REF
-                    and port == 6543
-                    and not has_project
-                ):
-                    qs_pairs.append(("options", f"project={PROJECT_REF}"))
-                    new_query = urlencode(qs_pairs, doseq=True)
-                    conn_str = urlunparse(parsed._replace(query=new_query))
+                    # Разбираем и при необходимости добавляем options=project=...
+                    parsed = urlparse(conn_str)
+                    qs_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+                    port = parsed.port
+                    has_project = any(
+                        k == "options" and "project=" in v for k, v in qs_pairs
+                    )
+                    if (
+                        PROJECT_REF
+                        and port == 6543
+                        and not has_project
+                    ):
+                        qs_pairs.append(("options", f"project={PROJECT_REF}"))
+                        new_query = urlencode(qs_pairs, doseq=True)
+                        conn_str = urlunparse(parsed._replace(query=new_query))
 
-                d = conninfo_to_dict(conn_str)
-                d.pop("password", None)
-                safe_params = d
-            except Exception:
-                safe_params = {"dsn": "DATABASE_URL"}
+                    d = conninfo_to_dict(conn_str)
+                    d.pop("password", None)
+                    safe_params = d
+                except Exception:
+                    safe_params = {"dsn": "DATABASE_URL"}
         else:
             host = DB_HOST or "aws-1-eu-north-1.pooler.supabase.com"
             port = int(DB_PORT or 6543)
@@ -274,8 +283,6 @@ class _MockCursor:
             row = self._db.users.get(tg_id)
             self._rows = [row] if row else []
         elif sql.startswith("insert into users"):
-            # согласуем порядок колонок: читаем из sql cols список
-            # проще: params содержат все значения по порядку
             cols_part = sql.split("(",1)[1].split(")",1)[0].replace(" ","")
             cols = cols_part.split(",")
             rec = dict(zip(cols, p))
@@ -285,7 +292,6 @@ class _MockCursor:
         elif sql.startswith("update users set") and sql.endswith("where tg_id=%s"):
             tg_id = p[-1]
             user = self._db.users.get(tg_id, {"tg_id": tg_id})
-            # пары set ... = %s по порядку
             set_clause = sql.split("set",1)[1].rsplit("where",1)[0]
             keys = [seg.split("=")[0].strip() for seg in set_clause.split(",")]
             for k, v in zip(keys, p[:-1]):
@@ -293,7 +299,6 @@ class _MockCursor:
             self._db.users[tg_id] = user
             self._rows = []
         elif sql.startswith("select tg_id, valid_until, remind_3d_sent from users"):
-            # простая выборка всех активных
             rows = []
             for u in self._db.users.values():
                 if u.get("status") == "active" and u.get("valid_until") is not None:
@@ -330,22 +335,17 @@ class _MockCursor:
             self._rows = [{"tg_id": row["tg_id"]}] if row else []
         # legal_confirms & doc_views
         elif sql.startswith("insert into legal_confirms"):
-            # noop for mock
             self._rows = []
         elif sql.startswith("insert into doc_views"):
-            # noop for mock
             self._rows = []
         elif sql.startswith("update users set policy_viewed_at=") or \
              sql.startswith("update users set consent_viewed_at=") or \
              sql.startswith("update users set offer_viewed_at=") or \
              sql.startswith("update users set legal_confirmed_at="):
-            # простые апдейты без возврата
             token = p[-1] if "policy_token=%s" in sql else None
-            # в mock у нас токен хранится в user, найдём по нему
             if token is not None:
                 for u in self._db.users.values():
                     if u.get("policy_token") == token:
-                        # поле обновляем по ключу из sql (грубая эвристика)
                         if sql.startswith("update users set policy_viewed_at="):
                             u["policy_viewed_at"] = p[0]
                         elif sql.startswith("update users set consent_viewed_at="):
@@ -362,7 +362,6 @@ class _MockCursor:
                     break
             self._rows = [found] if found else []
         else:
-            # операции CREATE TABLE/INDEX и прочее — игнорируем в mock
             self._rows = []
 
     async def fetchone(self):
@@ -398,7 +397,6 @@ async def init_db():
     """
     try:
         async with await db() as con:
-            # В mock всё игнорируется в execute(); в настоящей БД создаём таблицы
             async with con.cursor() as cur:
                 await cur.execute(
                     dedent("""
@@ -535,29 +533,25 @@ async def list_active_users():
 
 
 # ============================ Robokassa logic ============================
-def _sign(s: str) -> str:
-    # Возвращаем HEX в нижнем регистре, как в примере Робокассы
-    return hashlib.MD5(s.encode("utf-8")).hexdigest()
-
-
-def sign_success(out_sum, inv_id: int) -> str:
+def sign_form(out_sum, inv_id: int) -> str:
+    # Подпись для платёжной ссылки (кабинет может требовать MD5 или SHA256)
     base = f"{ROBOKASSA_LOGIN}:{money2(out_sum)}:{inv_id}:{ROBOKASSA_PASSWORD1}"
-    logger.info("RK base(success) %s", base.replace(ROBOKASSA_PASSWORD1, "***"))
-    return _sign(base)
+    logger.info("RK base(form) %s", base.replace(ROBOKASSA_PASSWORD1, "***"))
+    return _hash_hex(base)
 
 
 def sign_result_from_raw(out_sum_str: str, inv_id: int) -> str:
     # OutSum берём как пришёл от Робокассы (строкой), без форматирования
     base = f"{out_sum_str}:{inv_id}:{ROBOKASSA_PASSWORD2}"
     logger.info("RK base(result) %s", base.replace(ROBOKASSA_PASSWORD2, "***"))
-    return _rk_hash(s.encode("utf-8")).hexdigest()
+    return _hash_hex(base)
 
 
 def sign_success_from_raw(out_sum_str: str, inv_id: int) -> str:
     # Success-redirect подпись: OutSum:InvId:Password1 (без MerchantLogin)
     base = f"{out_sum_str}:{inv_id}:{ROBOKASSA_PASSWORD1}"
     logger.info("RK base(success_cb) %s", base.replace(ROBOKASSA_PASSWORD1, "***"))
-    return _sign(base)
+    return _hash_hex(base)
 
 
 def build_pay_url(inv_id: int, out_sum, description: str) -> str:
@@ -569,7 +563,7 @@ def build_pay_url(inv_id: int, out_sum, description: str) -> str:
             missing.append("ROBOKASSA_PASSWORD1")
         raise RuntimeError(f"Robokassa credentials missing: {', '.join(missing)}")
 
-    sig = sign_success(out_sum, inv_id)
+    sig = sign_form(out_sum, inv_id)
     params = {
         "MerchantLogin": ROBOKASSA_LOGIN,
         "OutSum":        money2(out_sum),
@@ -597,7 +591,6 @@ async def new_payment(tg_id: int, out_sum) -> int:
             row = await cur.fetchone()
             inv_id = (row or {}).get("inv_id")
             if not inv_id:
-                # mock variant could return None if not implemented — гарантируем значение
                 inv_id = getattr(con, "next_inv_id", 1)
             await con.commit()
     await upsert_user(tg_id, last_invoice_id=inv_id)
@@ -935,133 +928,3 @@ async def pay_result(request: Request):
     expected = sign_result_from_raw(out_sum_raw, inv_id)
     if not _eq_ci(sig, expected):
         try:
-            async with await db() as con:
-                async with con.cursor() as cur:
-                    await cur.execute("UPDATE payments SET status='failed' WHERE inv_id=%s", (inv_id,))
-                    await con.commit()
-        except Exception:
-            pass
-        raise HTTPException(403, "Invalid signature")
-
-    await set_payment_paid(inv_id)
-    async with await db() as con:
-        async with con.cursor() as cur:
-            await cur.execute("SELECT tg_id FROM payments WHERE inv_id=%s", (inv_id,))
-            row = await cur.fetchone()
-
-    if not row:
-        return PlainTextResponse(f"OK{inv_id}")
-
-    tg_id = row["tg_id"]
-
-    # продлеваем подписку относительно максимума(now, текущая valid_until)
-    u = await get_user(tg_id)
-    old_vu = None
-    if u and u.get("valid_until"):
-        try:
-            old_vu = u["valid_until"] if isinstance(u["valid_until"], datetime) else datetime.fromisoformat(str(u["valid_until"]))
-        except Exception:
-            old_vu = None
-    new_vu = _calc_extended_valid_until(old_vu, now_ts(), SUBSCRIPTION_DAYS)
-
-    await upsert_user(tg_id, status="active", valid_until=new_vu, remind_3d_sent=0)
-
-    # Пытаемся выдать инвайт в канал
-    if bot and CHANNEL_ID:
-        try:
-            expire_at = now_ts() + timedelta(days=2)
-            link = await bot.create_chat_invite_link(
-                chat_id=CHANNEL_ID,
-                name=f"Sub {tg_id} {inv_id}",
-                expire_date=int(expire_at.timestamp()),
-                member_limit=1
-            )
-            pretty_vu = new_vu.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
-            await bot.send_message(tg_id, f"Оплата получена ✅\nПодписка активна до: {pretty_vu}\nВаша ссылка в закрытый канал:\n{link.invite_link}")
-        except Exception as e:
-            logger.error("create_chat_invite_link failed: %s", e)
-            if ADMIN_USER_ID and bot:
-                try:
-                    await bot.send_message(ADMIN_USER_ID, f"Не удалось создать инвайт: {e}")
-                except Exception:
-                    pass
-
-    return PlainTextResponse(f"OK{inv_id}")
-
-
-# ======================== Success/Fail handlers ========================
-@app.get("/pay/success", response_class=HTMLResponse)
-async def pay_success(request: Request):
-    # Параметры приходят через GET после возврата пользователя
-    out_sum = request.query_params.get("OutSum")
-    inv_id = request.query_params.get("InvId")
-    sig = request.query_params.get("SignatureValue", "")
-    try:
-        inv_id_int = int(inv_id)
-    except Exception:
-        raise HTTPException(400, "Bad query")
-
-    expected = sign_success_from_raw(out_sum, inv_id_int)
-    if not _eq_ci(sig, expected):
-        raise HTTPException(403, "Invalid signature")
-
-    return HTMLResponse("""
-        <!doctype html><meta charset='utf-8'>
-        <h3>Оплата успешна ✅</h3>
-        <p>Если ссылка в канал не пришла в Telegram — откройте чат с ботом и напишите /stats.</p>
-    """)
-
-
-@app.get("/pay/fail", response_class=HTMLResponse)
-async def pay_fail(request: Request):
-    # Подпись может не передаваться — не валидируем строго
-    inv_id = request.query_params.get("InvId", "?")
-    return HTMLResponse(f"""
-        <!doctype html><meta charset='utf-8'>
-        <h3>Платёж не выполнен ❌</h3>
-        <p>Счёт #{inv_id} отменён или не оплачен. Вы можете повторить попытку, нажав в боте «🔁 Продлить подписку».</p>
-    """)
-
-
-# ========================= Webhook & startup =========================
-@app.post(f"/telegram/webhook/{WEBHOOK_SECRET}")
-async def telegram_webhook(request: Request):
-    if not bot:
-        raise HTTPException(500, "BOT_TOKEN не задан")
-    data = await request.json()
-    update = Update.model_validate(data)
-    await dp.feed_update(bot, update)
-    return {"ok": True}
-
-
-async def set_webhook():
-    if not bot:
-        logger.warning("BOT_TOKEN не задан — вебхук не установлен")
-        return
-    if not BASE_URL:
-        logger.warning("BASE_URL не задан — вебхук не установлен")
-        return
-    await bot.set_webhook(f"{BASE_URL}/telegram/webhook/{WEBHOOK_SECRET}")
-
-
-def ensure(path: str, content: str):
-    if not os.path.exists(path):
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-
-
-@app.on_event("startup")
-async def startup():
-    # создаём/мигрируем БД
-    try:
-        await init_db()
-    except Exception as e:
-        logger.error("startup init_db error: %s", e)
-
-    # автосоздание html-документов
-    ensure("static/policy.html",
-           "<!doctype html><meta charset='utf-8'><h1>Политика конфиденциальности</h1><p>Открытие фиксируется.</p>")
-    ensure(
-        "static/consent.html",
-        "<!doctype html><meta charset='utf-8'><h1>Согласие на обработку ПДн</h1><p>Открытие фиксируется.</p>"
-    )
