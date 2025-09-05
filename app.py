@@ -4,8 +4,8 @@ from psycopg.rows import dict_row
 # ===== imports =====
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
-from hashlib import md5, sha256
-from urllib.parse import urlencode
+from hashlib import sha256
+from urllib.parse import urlencode, quote_plus
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -51,10 +51,12 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
 ROBOKASSA_LOGIN = os.getenv("ROBOKASSA_LOGIN", "").strip()
 ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "").strip()
 ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "").strip()
-ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").strip().upper()
-if ROBOKASSA_SIGNATURE_ALG not in ("MD5", "SHA256"):
-    raise RuntimeError(f"Invalid ROBOKASSA_SIGNATURE_ALG: {ROBOKASSA_SIGNATURE_ALG}")
+ROBOKASSA_SIGNATURE_ALG = os.getenv("ROBOKASSA_SIGNATURE_ALG", "SHA256").strip().upper()  # "MD5" или "SHA256"
 ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0").strip()  # "1" тест, "0" боевой
+
+# Валидируем строго строками, никаких голых идентификаторов
+if ROBOKASSA_SIGNATURE_ALG not in {"MD5", "SHA256"}:
+    raise RuntimeError(f"Invalid ROBOKASSA_SIGNATURE_ALG: {ROBOKASSA_SIGNATURE_ALG}")
 
 PRICE_RUB = float(os.getenv("PRICE_RUB", "10"))
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
@@ -296,9 +298,9 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture": "ru",
         "Encoding": "utf-8",
-        "IsTest": "1" if ROBOKASSA_TEST_MODE == "1" else "0",
+        "IsTest": "0" if ROBOKASSA_TEST_MODE == "0" else "0",
     }
-    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
+    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params, encoding='utf-8', quote_via=quote_plus)
     safe_log_params = {k: v for k, v in params.items() if k != "SignatureValue"}
     logger.info("[RK DEBUG] %s", safe_log_params)
     return url
@@ -566,11 +568,16 @@ def _eq_ci(a: str, b: str) -> bool:
 async def pay_result(request: Request):
     data = dict(await request.form())
     try:
-        out_sum_raw = data.get("OutSum")  # строка как есть!
+        out_sum_raw = data.get("OutSum")              # <-- строка как есть!
         inv_id = int(data.get("InvId"))
-        sig = data.get("SignatureValue")
+        sig = (data.get("SignatureValue") or "").strip()
     except Exception:
         raise HTTPException(400, "Bad payload")
+
+    expected = sign_result_from_raw(out_sum_raw, inv_id)
+    if sig.lower() != expected.lower():
+        # ...
+        raise HTTPException(403, "Invalid signature")
 
     expected = sign_result_from_raw(out_sum_raw, inv_id)
     if not _eq_ci(sig, expected):
