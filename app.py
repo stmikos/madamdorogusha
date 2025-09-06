@@ -4,7 +4,7 @@ from psycopg.rows import dict_row
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
-from urllib.parse import urlencode, quote_plus
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
