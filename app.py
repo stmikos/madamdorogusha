@@ -4,7 +4,7 @@ from psycopg.rows import dict_row
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote_plus
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -309,7 +309,7 @@ def build_pay_url(inv_id: int, out_sum: float, description: str = "Подпис�
         "Encoding": "utf-8",
         "IsTest": "1" if ROBOKASSA_TEST_MODE == "1" else "0",
     }
-    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
+    url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params, encoding='utf-8', quote_via=quote_plus)
     safe = {k: v for k, v in params.items() if k != "SignatureValue"}
     logger.info("[RK DEBUG] %s", safe)
     return url
