@@ -1,0 +1,103 @@
+
+# -*- coding: utf-8 -*-
+"""
+payments_utils.py
+-----------------
+Идемпотентное создание платежа Robokassa в БД.
+
+Функция new_payment:
+- если уже есть открытый платеж (status='created') для tg_id — возвращает его inv_id,
+  при необходимости обновляет сумму и дату created_at;
+- если открытого платежа нет — создаёт новый и возвращает его inv_id.
+
+Подключение зависимостей:
+- По умолчанию пытается импортировать db, now_ts, upsert_user из app.py.
+- Можно явно передать свои зависимости через параметры: db_ctx, now_ts_fn, upsert_user_fn.
+
+Пример использования (если всё в app.py):
+    from payments_utils import new_payment
+    inv_id = await new_payment(tg_id, 10.00)
+
+Пример с явной передачей зависимостей:
+    inv_id = await new_payment(
+        tg_id, 10.00,
+        db_ctx=db, now_ts_fn=now_ts, upsert_user_fn=upsert_user
+    )
+"""
+
+from typing import Optional, Callable, Any
+
+
+def _resolve_deps(
+    db_ctx: Optional[Callable[..., Any]],
+    now_ts_fn: Optional[Callable[[], Any]],
+    upsert_user_fn: Optional[Callable[..., Any]],
+):
+    """Пытается взять зависимости из параметров, иначе импортирует из app.py."""
+    if db_ctx is not None and now_ts_fn is not None and upsert_user_fn is not None:
+        return db_ctx, now_ts_fn, upsert_user_fn
+    try:
+        from app import db as app_db, now_ts as app_now_ts, upsert_user as app_upsert_user  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "Не удалось разрешить зависимости. "
+            "Либо передайте db_ctx/now_ts_fn/upsert_user_fn явно, "
+            "либо убедитесь, что app.py экспортирует db, now_ts, upsert_user."
+        ) from e
+    return db_ctx or app_db, now_ts_fn or app_now_ts, upsert_user_fn or app_upsert_user
+
+
+async def new_payment(
+    tg_id: int,
+    out_sum: float,
+    *,
+    db_ctx: Optional[Callable[..., Any]] = None,
+    now_ts_fn: Optional[Callable[[], Any]] = None,
+    upsert_user_fn: Optional[Callable[..., Any]] = None,
+) -> int:
+    """
+    Создает или возвращает существующий открытый платеж для пользователя.
+
+    :param tg_id: Telegram user id
+    :param out_sum: сумма платежа (float/Decimal)
+    :param db_ctx: асинхронный контекстный менеджер соединения с БД (по умолчанию импорт из app.py)
+    :param now_ts_fn: функция, возвращающая UTC datetime (по умолчанию импорт из app.py)
+    :param upsert_user_fn: функция апдейта пользователя (по умолчанию импорт из app.py)
+    :return: inv_id платежа
+    """
+    db_ctx, now_ts_fn, upsert_user_fn = _resolve_deps(db_ctx, now_ts_fn, upsert_user_fn)
+
+    async with db_ctx() as con:
+        async with con.cursor() as cur:
+            # 1) Ищем уже открытый инвойс
+            await cur.execute(
+                "SELECT inv_id, out_sum FROM payments "
+                "WHERE tg_id=%s AND status='created' "
+                "ORDER BY inv_id DESC LIMIT 1",
+                (tg_id,),
+            )
+            row = await cur.fetchone()
+
+            if row:
+                inv_id = row["inv_id"]
+                # синхронизируем сумму и освежаем created_at при расхождении
+                if float(row["out_sum"]) != float(out_sum):
+                    await cur.execute(
+                        "UPDATE payments SET out_sum=%s, created_at=%s WHERE inv_id=%s",
+                        (out_sum, now_ts_fn(), inv_id),
+                    )
+                await con.commit()
+                await upsert_user_fn(tg_id, last_invoice_id=inv_id)
+                return inv_id
+
+            # 2) Открытого нет — создаём новый
+            await cur.execute(
+                "INSERT INTO payments(tg_id, out_sum, status, created_at) "
+                "VALUES(%s, %s, 'created', %s) RETURNING inv_id",
+                (tg_id, out_sum, now_ts_fn()),
+            )
+            inv_id = (await cur.fetchone())["inv_id"]
+            await con.commit()
+
+    await upsert_user_fn(tg_id, last_invoice_id=inv_id)
+    return inv_id
