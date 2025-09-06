@@ -144,18 +144,14 @@ def _log_db_cfg(eff_user: str, eff_options: str | None, using_url: bool):
 
 def _compose_kw_from_env():
     """
-    Выбирает корректный способ роутинга проекта:
-      A) user='postgres' + options='project=<ref>'
-      B) user='postgres.<ref>' без options
+    Маршрутизируемся через user=postgres.<project_ref>, без options.
+    PROJECT_REF можно не задавать — берём из DB_USER, если он уже с суффиксом.
     """
-    user = DB_USER
-    options = None
+    user = DB_USER or "postgres"
 
-    if PROJECT_REF:
-        if user and user.endswith(f".{PROJECT_REF}"):
-            options = None  # вариант B
-        elif user and "." not in user:
-            options = f"project={PROJECT_REF}"  # вариант A
+    # если пользователь без суффикса и PROJECT_REF задан — пришиваем его
+    if "." not in user and PROJECT_REF:
+        user = f"{user}.{PROJECT_REF}"
 
     kw = dict(
         host=DB_HOST,
@@ -167,8 +163,26 @@ def _compose_kw_from_env():
         row_factory=dict_row,
         connect_timeout=10,
     )
-    if options:
-        kw["options"] = options
+    return kw
+
+
+@asynccontextmanager
+async def db():
+    """
+    Подключение к БД: используем только keyword args (без DATABASE_URL и без options).
+    """
+    if not DB_USER or not DB_PASSWORD:
+        raise RuntimeError("DB_USER/DB_PASSWORD must be set")
+
+    kw = _compose_kw_from_env()
+    logger.info("[DB CFG] host=%s port=%s db=%s user=%s sslmode=require (no options, no DATABASE_URL)",
+                kw["host"], kw["port"], kw["dbname"], kw["user"])
+    conn = await psycopg.AsyncConnection.connect(**kw)
+    try:
+        yield conn
+    finally:
+        await conn.close()
+
     return kw
 
 def _strip_options_from_url(dsn: str):
