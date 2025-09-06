@@ -5,6 +5,10 @@ import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256, md5
 from urllib.parse import urlencode
+from payments_utils import new_payment
+from myapp.db import db
+from myapp.timeutil import now_ts
+from myapp.users import upsert_user
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -440,7 +444,9 @@ async def on_legal_agree(cb: CallbackQuery):
         await con.commit()
 
     # создаём платёж и выдаём ссылку
-    inv_id = await new_payment(tg_id, PRICE_RUB)
+    inv_id = await new_payment(tg_id, 10.00,
+    db_ctx=db, now_ts_fn=now_ts, upsert_user_fn=upsert_user
+)
     url = build_pay_url(inv_id, PRICE_RUB, "Подписка на 30 дней")
 
     await cb.message.answer("Спасибо! ✅ Теперь можно оплатить:", reply_markup=pay_kb(url))
