@@ -312,7 +312,7 @@ def build_pay_url(inv_id: int, out_sum, description: str = "Подписка н�
         "SignatureValue": sig,
         "Culture":       "ru",
         "Encoding":      "utf-8",
-        "IsTest":        "1" if ROBOKASSA_TEST_MODE == "1" else "0",
+        "IsTest":        "0" if ROBOKASSA_TEST_MODE == "0" else "0",
     }
     url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
     safe_log = {k: v for k, v in params.items() if k != "SignatureValue"}
