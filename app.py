@@ -3,7 +3,7 @@ from textwrap import dedent
 from psycopg.rows import dict_row
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
-from hashlib import sha256, MD5
+from hashlib import sha256, md5
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, HTTPException
@@ -55,7 +55,7 @@ ROBOKASSA_TEST_MODE = os.getenv("ROBOKASSA_TEST_MODE", "0").strip()  # "1" те�
 if ROBOKASSA_SIGNATURE_ALG not in {"MD5", "SHA256"}:
     raise RuntimeError(f"Invalid ROBOKASSA_SIGNATURE_ALG: {ROBOKASSA_SIGNATURE_ALG}")
 
-PRICE_RUB = float(os.getenv("PRICE_RUB", "10"))
+PRICE_RUB = float(os.getenv("PRICE_RUB", "10.00"))
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
 
 # БД
