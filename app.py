@@ -57,11 +57,20 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0") or 0)
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
 
 # Robokassa
-ROBOKASSA_LOGIN = _clean(os.getenv("ROBOKASSA_LOGIN"))
-ROBOKASSA_PASSWORD1 = _clean(os.getenv("ROBOKASSA_PASSWORD1"))
-ROBOKASSA_PASSWORD2 = _clean(os.getenv("ROBOKASSA_PASSWORD2"))
-ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA256").upper()  # MD5|SHA256
-ROBOKASSA_TEST_MODE = _clean(os.getenv("ROBOKASSA_TEST_MODE") or "0")  # "1" тест, "0" боевой
+ROBOKASSA_LOGIN = (os.getenv("ROBOKASSA_LOGIN") or "").strip()
+ROBOKASSA_PASSWORD1 = (os.getenv("ROBOKASSA_PASSWORD1") or "").strip()
+ROBOKASSA_PASSWORD2 = (os.getenv("ROBOKASSA_PASSWORD2") or "").strip()
+
+_raw_alg = (os.getenv("ROBOKASSA_SIGNATURE_ALG") or "SHA256").strip().upper().replace("-", "")
+if _raw_alg in {"SHA256", "256"}:
+    ROBOKASSA_SIGNATURE_ALG = "SHA256"
+elif _raw_alg == "MD5":
+    ROBOKASSA_SIGNATURE_ALG = "MD5"
+else:
+    raise RuntimeError(f"Invalid ROBOKASSA_SIGNATURE_ALG: {_raw_alg} (use MD5 or SHA256)")
+
+ROBOKASSA_TEST_MODE = (os.getenv("ROBOKASSA_TEST_MODE") or "0").strip()  # "1" тест, "0" боевой
+
 
 # Цена / срок
 PRICE_RUB = Decimal(_clean(os.getenv("PRICE_RUB") or "10.00")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
