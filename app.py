@@ -255,10 +255,10 @@ async def upsert_user(tg_id: int, **kwargs):
 
 # ================== Robokassa ==================
 def _pwd1() -> str:
-    return ROBOKASSA_PASSWORD1_TEST if ROBOKASSA_TEST_MODE == "1" and ROBOKASSA_PASSWORD1_TEST else ROBOKASSA_PASSWORD1
+    return ROBOKASSA_PASSWORD1_TEST if ROBOKASSA_TEST_MODE == "0" and ROBOKASSA_PASSWORD1_TEST else ROBOKASSA_PASSWORD1
 
 def _pwd2() -> str:
-    return ROBOKASSA_PASSWORD2_TEST if ROBOKASSA_TEST_MODE == "1" and ROBOKASSA_PASSWORD2_TEST else ROBOKASSA_PASSWORD2
+    return ROBOKASSA_PASSWORD2_TEST if ROBOKASSA_TEST_MODE == "0" and ROBOKASSA_PASSWORD2_TEST else ROBOKASSA_PASSWORD2
 
 def _hash_hex(s: str) -> str:
     if ROBOKASSA_SIGNATURE_ALG == "SHA256":
@@ -289,7 +289,7 @@ def build_pay_url(inv_id: int, out_sum, description: str = "Подписка н�
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture":        "ru",
         "Encoding":       "utf-8",
-        "IsTest":         "1" if ROBOKASSA_TEST_MODE == "1" else "0",
+        "IsTest":         "0" if ROBOKASSA_TEST_MODE == "0" else "0",
     }
     url = "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params)
     logger.info("[RK DEBUG] %s", {k: v for k, v in params.items() if k != "SignatureValue"})
