@@ -136,7 +136,7 @@ def _compose_conninfo() -> tuple[str, dict]:
             kwargs["options"] = f"project={PROJECT_REF}"
         return DATABASE_URL, kwargs
 
-    host = DB_HOST or "aws-1-eu-central-1.pooler.supabase.com"
+    host = DB_HOST or "aws-1-eu-north-1.pooler.supabase.com"
     port = DB_PORT or 6543
     name = DB_NAME or "postgres"
     user = DB_USER
