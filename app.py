@@ -269,7 +269,8 @@ def _hash_hex(s: str) -> str:
 
 def sign_success(out_sum, inv_id: int) -> str:
     base = f"{ROBOKASSA_LOGIN}:{money2(out_sum)}:{inv_id}:{_pwd1()}"
-    logger.info("RK base(success)='%s'", base.replace(_pwd1(), "***"))
+    logger.info("RK SIGNATURE DEBUG inv_id=%s out_sum=%s algo=%s sig=%s",
+            inv_id, f"{out_sum:.2f}", ROBOKASSA_SIGNATURE_ALG, sig)
     return _hash_hex(base)
 
 def sign_result_from_raw(out_sum_raw: str, inv_id: int) -> str:
