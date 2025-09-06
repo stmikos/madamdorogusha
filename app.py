@@ -130,6 +130,14 @@ main_menu = ReplyKeyboardMarkup(
 )
 
 # ===== DB layer =====
+def _log_db_cfg():
+    host = DB_HOST or "aws-1-eu-central-1.pooler.supabase.com"
+    opts = f"project={PROJECT_REF}" if PROJECT_REF else None
+    logger.info(
+        "[DB CFG] host=%s port=%s db=%s user=%s sslmode=require options=%s (DATABASE_URL=%s)",
+        host, DB_PORT or 6543, DB_NAME or "postgres", DB_USER, opts, bool(DATABASE_URL)
+    )
+
 def _compose_dsn() -> str:
     if DATABASE_URL:
         dsn = DATABASE_URL
@@ -644,6 +652,7 @@ def ensure(path: str, content: str):
 
 @app.on_event("startup")
 async def startup():
+    _log_db_cfg()
     try:
         await init_db()
     except Exception as e:
