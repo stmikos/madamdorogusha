@@ -137,7 +137,7 @@ def _compose_dsn() -> str:
             sep = "&" if "?" in dsn else "?"
             dsn = f"{dsn}{sep}options=project={PROJECT_REF}"
         return dsn
-    host = DB_HOST or "aws-1-eu-north-1.pooler.supabase.com"
+    host = DB_HOST or "aws-1-eu-central-1.pooler.supabase.com"
     port = DB_PORT or 6543
     name = DB_NAME or "postgres"
     user = DB_USER
