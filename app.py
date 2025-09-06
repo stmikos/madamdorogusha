@@ -3,7 +3,7 @@ from textwrap import dedent
 from psycopg.rows import dict_row
 import os, re, asyncio, logging, secrets
 from datetime import datetime, timedelta, timezone
-from hashlib import md5, sha256
+from hashlib import sha256
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, HTTPException
