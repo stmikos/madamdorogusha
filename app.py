@@ -121,10 +121,7 @@ main_menu = ReplyKeyboardMarkup(
 def _compose_dsn() -> str:
     # Если задан полный DATABASE_URL — используем его как есть.
     if DATABASE_URL:
-        logger.info(
-            "[DB CFG] using DATABASE_URL (masked); project_ref=%s",
-            PROJECT_REF or "-"
-        )
+        logger.info("[DB CFG] using DATABASE_URL (masked); project_ref=%s", PROJECT_REF or "-")
         return DATABASE_URL
 
     if not DB_PASSWORD:
@@ -132,7 +129,7 @@ def _compose_dsn() -> str:
     if not PROJECT_REF:
         raise RuntimeError("PROJECT_REF is not set (Supabase project ref)")
 
-    # Важно: key-value формат, без '?', без '&'. options=project=<ref>
+    # key=value формат (без '?')
     dsn = (
         f"host={DB_HOST} port={DB_PORT} dbname={DB_NAME} "
         f"user={DB_USER} password={DB_PASSWORD} sslmode=require "
@@ -255,10 +252,15 @@ async def upsert_user(tg_id: int, **kwargs):
 
 # ================== Robokassa ==================
 def _pwd1() -> str:
-    return ROBOKASSA_PASSWORD1_TEST if ROBOKASSA_TEST_MODE == "0" and ROBOKASSA_PASSWORD1_TEST else ROBOKASSA_PASSWORD1
+    # В тестовом режиме берём тестовый пароль, иначе — боевой
+    if ROBOKASSA_TEST_MODE == "1" and ROBOKASSA_PASSWORD1_TEST:
+        return ROBOKASSA_PASSWORD1_TEST
+    return ROBOKASSA_PASSWORD1
 
 def _pwd2() -> str:
-    return ROBOKASSA_PASSWORD2_TEST if ROBOKASSA_TEST_MODE == "0" and ROBOKASSA_PASSWORD2_TEST else ROBOKASSA_PASSWORD2
+    if ROBOKASSA_TEST_MODE == "1" and ROBOKASSA_PASSWORD2_TEST:
+        return ROBOKASSA_PASSWORD2_TEST
+    return ROBOKASSA_PASSWORD2
 
 def _hash_hex(s: str) -> str:
     if ROBOKASSA_SIGNATURE_ALG == "SHA256":
@@ -268,16 +270,19 @@ def _hash_hex(s: str) -> str:
     raise RuntimeError(f"Unsupported ROBOKASSA_SIGNATURE_ALG={ROBOKASSA_SIGNATURE_ALG}")
 
 def sign_success(out_sum, inv_id: int) -> str:
-    base = f"{ROBOKASSA_LOGIN}:{money2(out_sum)}:{inv_id}:{_pwd1()}"
-    logger.info("RK SIGNATURE DEBUG inv_id=%s out_sum=%s algo=%s sig=%s",
-            inv_id, f"{out_sum:.2f}", ROBOKASSA_SIGNATURE_ALG, sig)
-    return _hash_hex(base)
+    out_sum_str = money2(out_sum)
+    base = f"{ROBOKASSA_LOGIN}:{out_sum_str}:{inv_id}:{_pwd1()}"
+    signature = _hash_hex(base)
+    # лог без пароля
+    logger.info("RK base(success)='%s' -> sig=%s", base.replace(_pwd1(), "***"), signature)
+    return signature
 
 def sign_result_from_raw(out_sum_raw: str, inv_id: int) -> str:
     # Важно: OutSum берём СТРОКОЙ, без реформатирования
     base = f"{out_sum_raw}:{inv_id}:{_pwd2()}"
-    logger.info("RK base(result)='%s'", base.replace(_pwd2(), "***"))
-    return _hash_hex(base)
+    signature = _hash_hex(base)
+    logger.info("RK base(result)='%s' -> sig=%s", base.replace(_pwd2(), "***"), signature)
+    return signature
 
 def build_pay_url(inv_id: int, out_sum, description: str = "Подписка на 30 дней") -> str:
     if not ROBOKASSA_LOGIN or not _pwd1():
@@ -286,7 +291,7 @@ def build_pay_url(inv_id: int, out_sum, description: str = "Подписка н�
         "MerchantLogin":  ROBOKASSA_LOGIN,
         "OutSum":         money2(out_sum),
         "InvId":          str(inv_id),
-        "Description":    description,   # urlencode сам закодирует
+        "Description":    description,   # urlencode закодирует
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture":        "ru",
         "Encoding":       "utf-8",
