@@ -63,7 +63,7 @@ SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
 
 # БД (Supabase Pooler)
 DATABASE_URL = _clean(os.getenv("DATABASE_URL"))
-DB_HOST = _clean(os.getenv("DB_HOST") or "aws-1-eu-north-1.pooler.supabase.com")
+DB_HOST = _clean(os.getenv("DB_HOST") or "aws-1-eu-central-1.pooler.supabase.com")
 DB_PORT = int(os.getenv("DB_PORT", "6543"))
 DB_NAME = _clean(os.getenv("DB_NAME") or "postgres")
 DB_USER = _clean(os.getenv("DB_USER") or "postgres")
