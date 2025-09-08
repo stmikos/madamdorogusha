@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# app.py — FastAPI + Aiogram + Supabase + Robokassa (готов к деплою на Render)
+
 import os, re, asyncio, logging, secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -23,7 +25,7 @@ from aiogram.types import (
     FSInputFile, ErrorEvent
 )
 
-# ================== базовые утилиты ==================
+# ============== базовые утилиты ==============
 def now_ts() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -31,11 +33,11 @@ def money2(x) -> str:
     d = Decimal(str(x)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return format(d, ".2f")
 
-# ================== логирование ==================
+# ============== логирование ==============
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
-# ================== окружение ==================
+# ============== окружение ==============
 def _clean(v: str | None) -> str:
     return (v or "").strip().strip('"').strip("'")
 
@@ -54,7 +56,7 @@ ROBOKASSA_PASSWORD1 = _clean(os.getenv("ROBOKASSA_PASSWORD1"))
 ROBOKASSA_PASSWORD2 = _clean(os.getenv("ROBOKASSA_PASSWORD2"))
 ROBOKASSA_PASSWORD1_TEST = _clean(os.getenv("ROBOKASSA_PASSWORD1_TEST"))
 ROBOKASSA_PASSWORD2_TEST = _clean(os.getenv("ROBOKASSA_PASSWORD2_TEST"))
-ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA256").upper()  # MD5|SHA256
+ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA256").upper()  # "SHA256" | "MD5"
 ROBOKASSA_TEST_MODE = _clean(os.getenv("ROBOKASSA_TEST_MODE") or "0")  # "1" тест, "0" боевой
 
 # Цена/подписка
@@ -68,9 +70,9 @@ DB_PORT = int(os.getenv("DB_PORT", "6543"))
 DB_NAME = _clean(os.getenv("DB_NAME") or "postgres")
 DB_USER = _clean(os.getenv("DB_USER") or "postgres")
 DB_PASSWORD = _clean(os.getenv("DB_PASSWORD"))
-PROJECT_REF = _clean(os.getenv("PROJECT_REF"))
+PROJECT_REF = _clean(os.getenv("PROJECT_REF"))  # например vmwyfqsymxngrmdbwgbi
 
-# ================== FastAPI & статика ==================
+# ============== FastAPI & статика ==============
 app = FastAPI(title="TG Sub Bot")
 os.makedirs("static", exist_ok=True)
 os.makedirs("assets", exist_ok=True)
@@ -84,7 +86,7 @@ def root():
 def health():
     return {"status": "ok"}
 
-# ================== Aiogram ==================
+# ============== Aiogram ==============
 if not BOT_TOKEN or not BASE_URL:
     logger.warning("⚠️ BOT_TOKEN и/или BASE_URL не заданы — проверь переменные окружения")
 
@@ -117,9 +119,9 @@ main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-# ================== БД подключение (key-value DSN) ==================
+# ============== Подключение к БД (устойчивое к «сну») ==============
 def _compose_dsn() -> str:
-    # Если задан полный DATABASE_URL — используем его как есть.
+    # Если задан полный DATABASE_URL — используем его как есть (НЕ добавляем options)
     if DATABASE_URL:
         logger.info("[DB CFG] using DATABASE_URL (masked); project_ref=%s", PROJECT_REF or "-")
         return DATABASE_URL
@@ -129,29 +131,42 @@ def _compose_dsn() -> str:
     if not PROJECT_REF:
         raise RuntimeError("PROJECT_REF is not set (Supabase project ref)")
 
-    # key=value формат (без '?')
+    # key=value DSN — работает с PgBouncer 6543
     dsn = (
         f"host={DB_HOST} port={DB_PORT} dbname={DB_NAME} "
         f"user={DB_USER} password={DB_PASSWORD} sslmode=require "
         f"options=project={PROJECT_REF}"
     )
-    logger.info(
-        "[DB CFG] host=%s port=%s db=%s user=%s sslmode=require options=project=%s (DATABASE_URL=False)",
-        DB_HOST, DB_PORT, DB_NAME, DB_USER, PROJECT_REF
-    )
+    logger.info("[DB CFG] host=%s port=%s db=%s user=%s sslmode=require options=project=%s (DATABASE_URL=False)",
+                DB_HOST, DB_PORT, DB_NAME, DB_USER, PROJECT_REF)
     return dsn
+
+async def _db_connect_with_retries(max_tries: int = 5, base_delay: float = 0.5):
+    delay = base_delay
+    last_exc = None
+    for _ in range(max_tries):
+        try:
+            return await psycopg.AsyncConnection.connect(
+                _compose_dsn(), row_factory=dict_row, connect_timeout=8
+            )
+        except Exception as e:
+            last_exc = e
+            await asyncio.sleep(delay)
+            delay = min(8.0, delay * 2)
+    raise last_exc
 
 @asynccontextmanager
 async def db():
-    conn = await psycopg.AsyncConnection.connect(
-        _compose_dsn(), row_factory=dict_row, connect_timeout=10
-    )
+    conn = await _db_connect_with_retries()
     try:
         yield conn
     finally:
-        await conn.close()
+        try:
+            await conn.close()
+        except Exception:
+            pass
 
-# ================== Инициализация БД ==================
+# ============== Инициализация БД ==============
 async def init_db():
     try:
         async with db() as con:
@@ -204,7 +219,7 @@ async def init_db():
     except Exception as e:
         logger.error("init_db failed: %s", e)
 
-# ================== CRUD ==================
+# ============== CRUD ==============
 async def get_user(tg_id: int):
     try:
         async with db() as con:
@@ -250,39 +265,37 @@ async def upsert_user(tg_id: int, **kwargs):
     except Exception as e:
         logger.error("upsert_user failed: %s", e)
 
-# ================== Robokassa ==================
+# ============== Robokassa ==============
 def _pwd1() -> str:
-    # В тестовом режиме берём тестовый пароль, иначе — боевой
-    if ROBOKASSA_TEST_MODE == "1" and ROBOKASSA_PASSWORD1_TEST:
+    # В тесте используем тестовые пароли, если заданы; иначе — боевые
+    if ROBOKASSA_TEST_MODE == "0" and ROBOKASSA_PASSWORD1_TEST:
         return ROBOKASSA_PASSWORD1_TEST
     return ROBOKASSA_PASSWORD1
 
 def _pwd2() -> str:
-    if ROBOKASSA_TEST_MODE == "1" and ROBOKASSA_PASSWORD2_TEST:
+    if ROBOKASSA_TEST_MODE == "0" and ROBOKASSA_PASSWORD2_TEST:
         return ROBOKASSA_PASSWORD2_TEST
     return ROBOKASSA_PASSWORD2
 
 def _hash_hex(s: str) -> str:
     if ROBOKASSA_SIGNATURE_ALG == "SHA256":
         return sha256(s.encode("utf-8")).hexdigest().upper()
-    elif ROBOKASSA_SIGNATURE_ALG == "MD5":
+    if ROBOKASSA_SIGNATURE_ALG == "MD5":
         return md5(s.encode("utf-8")).hexdigest().upper()
     raise RuntimeError(f"Unsupported ROBOKASSA_SIGNATURE_ALG={ROBOKASSA_SIGNATURE_ALG}")
 
 def sign_success(out_sum, inv_id: int) -> str:
-    out_sum_str = money2(out_sum)
-    base = f"{ROBOKASSA_LOGIN}:{out_sum_str}:{inv_id}:{_pwd1()}"
-    signature = _hash_hex(base)
-    # лог без пароля
-    logger.info("RK base(success)='%s' -> sig=%s", base.replace(_pwd1(), "***"), signature)
-    return signature
+    base = f"{ROBOKASSA_LOGIN}:{money2(out_sum)}:{inv_id}:{_pwd1()}"
+    sig = _hash_hex(base)
+    logger.info("RK base(success)='%s' -> sig=%s", base.replace(_pwd1(), "***"), sig)
+    return sig
 
 def sign_result_from_raw(out_sum_raw: str, inv_id: int) -> str:
-    # Важно: OutSum берём СТРОКОЙ, без реформатирования
+    # OutSum берём СТРОКОЙ как пришёл (без форматирования!)
     base = f"{out_sum_raw}:{inv_id}:{_pwd2()}"
-    signature = _hash_hex(base)
-    logger.info("RK base(result)='%s' -> sig=%s", base.replace(_pwd2(), "***"), signature)
-    return signature
+    sig = _hash_hex(base)
+    logger.info("RK base(result)='%s' -> sig=%s", base.replace(_pwd2(), "***"), sig)
+    return sig
 
 def build_pay_url(inv_id: int, out_sum, description: str = "Подписка на 30 дней") -> str:
     if not ROBOKASSA_LOGIN or not _pwd1():
@@ -291,7 +304,7 @@ def build_pay_url(inv_id: int, out_sum, description: str = "Подписка н�
         "MerchantLogin":  ROBOKASSA_LOGIN,
         "OutSum":         money2(out_sum),
         "InvId":          str(inv_id),
-        "Description":    description,   # urlencode закодирует
+        "Description":    description,
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture":        "ru",
         "Encoding":       "utf-8",
@@ -350,7 +363,7 @@ def pay_kb(url: str) -> InlineKeyboardMarkup:
         inline_keyboard=[[InlineKeyboardButton(text=f"💳 Оплатить {money2(PRICE_RUB)} ₽ через Robokassa", url=url)]]
     )
 
-# ================== Документы и согласие ==================
+# ============== Документы и согласие ==============
 def legal_keyboard(token: str) -> InlineKeyboardMarkup:
     # одна кнопка подтверждения
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -385,7 +398,7 @@ async def _legal_ok(tg_id: int) -> bool:
         logger.error("_legal_ok failed: %s", e)
         return False
 
-# ================== Bot handlers ==================
+# ============== Bot handlers ==============
 @dp.message(CommandStart())
 async def on_start(message: Message):
     token = await get_or_make_token(message.from_user.id)
@@ -517,7 +530,7 @@ async def on_stats(message: Message):
 async def on_text(message: Message):
     await message.answer("Напишите /help для списка команд.")
 
-# ================== Документные страницы (просто отдать HTML) ==================
+# ============== Документные страницы (просто отдать HTML) ==============
 def _read_html(path: str) -> HTMLResponse:
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -537,7 +550,7 @@ def consent_plain():
 def offer_plain():
     return _read_html("static/offer.html")
 
-# ================== Robokassa callbacks ==================
+# ============== Robokassa callbacks ==============
 @app.post("/pay/result")
 async def pay_result(request: Request):
     data = dict(await request.form())
@@ -554,7 +567,10 @@ async def pay_result(request: Request):
         try:
             async with db() as con:
                 async with con.cursor() as cur:
-                    await cur.execute("UPDATE payments SET status='failed' WHERE inv_id=%s AND status='created'", (inv_id,))
+                    await cur.execute(
+                        "UPDATE payments SET status='failed' WHERE inv_id=%s AND status='created'",
+                        (inv_id,),
+                    )
                 await con.commit()
         except Exception:
             pass
@@ -602,7 +618,7 @@ def pay_success():
 def pay_fail():
     return HTMLResponse("<h2>Оплата не завершена. Вы можете повторить попытку в боте.</h2>")
 
-# ================== Webhook & lifecycle ==================
+# ============== Webhook & lifecycle ==============
 @app.post(f"/telegram/webhook/{WEBHOOK_SECRET}")
 async def telegram_webhook(request: Request):
     if not bot:
@@ -663,3 +679,5 @@ async def shutdown():
         except asyncio.CancelledError:
             pass
     loop_task = None
+
+# ===== End of file =====
