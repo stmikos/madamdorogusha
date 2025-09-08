@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-# app.py — FastAPI + Aiogram + Supabase + Robokassa (готов к деплою на Render)
-
 import os, re, asyncio, logging, secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -25,7 +23,7 @@ from aiogram.types import (
     FSInputFile, ErrorEvent
 )
 
-# ============== базовые утилиты ==============
+# =============== базовые утилиты ===============
 def now_ts() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -33,11 +31,11 @@ def money2(x) -> str:
     d = Decimal(str(x)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return format(d, ".2f")
 
-# ============== логирование ==============
+# =============== логирование ===============
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
-# ============== окружение ==============
+# =============== окружение ===============
 def _clean(v: str | None) -> str:
     return (v or "").strip().strip('"').strip("'")
 
@@ -46,8 +44,9 @@ BOT_TOKEN = _clean(os.getenv("BOT_TOKEN"))
 BASE_URL = _clean(os.getenv("BASE_URL")).rstrip("/")
 WEBHOOK_SECRET = _clean(os.getenv("WEBHOOK_SECRET") or "secret")
 
-# Канал / админ
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0") or 0)
+# Канал / админ / фолбэк-инвайт
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0") or 0)  # должен быть вида -100xxxxxxxxxx
+CHANNEL_FALLBACK_INVITE = _clean(os.getenv("CHANNEL_FALLBACK_INVITE"))  # постоянная ссылка, опционально
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0) or None
 
 # Robokassa
@@ -56,23 +55,23 @@ ROBOKASSA_PASSWORD1 = _clean(os.getenv("ROBOKASSA_PASSWORD1"))
 ROBOKASSA_PASSWORD2 = _clean(os.getenv("ROBOKASSA_PASSWORD2"))
 ROBOKASSA_PASSWORD1_TEST = _clean(os.getenv("ROBOKASSA_PASSWORD1_TEST"))
 ROBOKASSA_PASSWORD2_TEST = _clean(os.getenv("ROBOKASSA_PASSWORD2_TEST"))
-ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA256").upper()  # "SHA256" | "MD5"
+ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA256").upper()  # MD5|SHA256
 ROBOKASSA_TEST_MODE = _clean(os.getenv("ROBOKASSA_TEST_MODE") or "0")  # "1" тест, "0" боевой
 
 # Цена/подписка
 PRICE_RUB = Decimal(_clean(os.getenv("PRICE_RUB") or "10")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
+SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "3"))
 
-# БД (Supabase Pooler)
+# БД (Supabase Pooler или полноценный URL)
 DATABASE_URL = _clean(os.getenv("DATABASE_URL"))
 DB_HOST = _clean(os.getenv("DB_HOST") or "aws-1-eu-central-1.pooler.supabase.com")
 DB_PORT = int(os.getenv("DB_PORT", "6543"))
 DB_NAME = _clean(os.getenv("DB_NAME") or "postgres")
 DB_USER = _clean(os.getenv("DB_USER") or "postgres")
 DB_PASSWORD = _clean(os.getenv("DB_PASSWORD"))
-PROJECT_REF = _clean(os.getenv("PROJECT_REF"))  # например vmwyfqsymxngrmdbwgbi
+PROJECT_REF = _clean(os.getenv("PROJECT_REF"))
 
-# ============== FastAPI & статика ==============
+# =============== FastAPI & статика ===============
 app = FastAPI(title="TG Sub Bot")
 os.makedirs("static", exist_ok=True)
 os.makedirs("assets", exist_ok=True)
@@ -86,7 +85,7 @@ def root():
 def health():
     return {"status": "ok"}
 
-# ============== Aiogram ==============
+# =============== Aiogram ===============
 if not BOT_TOKEN or not BASE_URL:
     logger.warning("⚠️ BOT_TOKEN и/или BASE_URL не заданы — проверь переменные окружения")
 
@@ -115,13 +114,13 @@ main_menu = ReplyKeyboardMarkup(
         [KeyboardButton(text="💳 Оплатить подписку")],
         [KeyboardButton(text="📄 Документы")],
         [KeyboardButton(text="📊 Мой статус")],
+        [KeyboardButton(text="🔁 Прислать ссылку")],  # <— добавил кнопку resend
     ],
     resize_keyboard=True,
 )
 
-# ============== Подключение к БД (устойчивое к «сну») ==============
+# =============== БД подключение (key-value DSN) ===============
 def _compose_dsn() -> str:
-    # Если задан полный DATABASE_URL — используем его как есть (НЕ добавляем options)
     if DATABASE_URL:
         logger.info("[DB CFG] using DATABASE_URL (masked); project_ref=%s", PROJECT_REF or "-")
         return DATABASE_URL
@@ -131,42 +130,29 @@ def _compose_dsn() -> str:
     if not PROJECT_REF:
         raise RuntimeError("PROJECT_REF is not set (Supabase project ref)")
 
-    # key=value DSN — работает с PgBouncer 6543
+    # key=value формат, без '?', 'options=project=...'
     dsn = (
         f"host={DB_HOST} port={DB_PORT} dbname={DB_NAME} "
         f"user={DB_USER} password={DB_PASSWORD} sslmode=require "
         f"options=project={PROJECT_REF}"
     )
-    logger.info("[DB CFG] host=%s port=%s db=%s user=%s sslmode=require options=project=%s (DATABASE_URL=False)",
-                DB_HOST, DB_PORT, DB_NAME, DB_USER, PROJECT_REF)
+    logger.info(
+        "[DB CFG] host=%s port=%s db=%s user=%s sslmode=require options=project=%s (DATABASE_URL=False)",
+        DB_HOST, DB_PORT, DB_NAME, DB_USER, PROJECT_REF
+    )
     return dsn
-
-async def _db_connect_with_retries(max_tries: int = 5, base_delay: float = 0.5):
-    delay = base_delay
-    last_exc = None
-    for _ in range(max_tries):
-        try:
-            return await psycopg.AsyncConnection.connect(
-                _compose_dsn(), row_factory=dict_row, connect_timeout=8
-            )
-        except Exception as e:
-            last_exc = e
-            await asyncio.sleep(delay)
-            delay = min(8.0, delay * 2)
-    raise last_exc
 
 @asynccontextmanager
 async def db():
-    conn = await _db_connect_with_retries()
+    conn = await psycopg.AsyncConnection.connect(
+        _compose_dsn(), row_factory=dict_row, connect_timeout=10
+    )
     try:
         yield conn
     finally:
-        try:
-            await conn.close()
-        except Exception:
-            pass
+        await conn.close()
 
-# ============== Инициализация БД ==============
+# =============== Инициализация БД ===============
 async def init_db():
     try:
         async with db() as con:
@@ -219,7 +205,7 @@ async def init_db():
     except Exception as e:
         logger.error("init_db failed: %s", e)
 
-# ============== CRUD ==============
+# =============== CRUD ===============
 async def get_user(tg_id: int):
     try:
         async with db() as con:
@@ -265,9 +251,9 @@ async def upsert_user(tg_id: int, **kwargs):
     except Exception as e:
         logger.error("upsert_user failed: %s", e)
 
-# ============== Robokassa ==============
+# =============== Робокасса: подписи и URL ===============
 def _pwd1() -> str:
-    # В тесте используем тестовые пароли, если заданы; иначе — боевые
+    # если тестовый режим и есть тестовый пароль — берем его
     if ROBOKASSA_TEST_MODE == "0" and ROBOKASSA_PASSWORD1_TEST:
         return ROBOKASSA_PASSWORD1_TEST
     return ROBOKASSA_PASSWORD1
@@ -280,7 +266,7 @@ def _pwd2() -> str:
 def _hash_hex(s: str) -> str:
     if ROBOKASSA_SIGNATURE_ALG == "SHA256":
         return sha256(s.encode("utf-8")).hexdigest().upper()
-    if ROBOKASSA_SIGNATURE_ALG == "MD5":
+    elif ROBOKASSA_SIGNATURE_ALG == "MD5":
         return md5(s.encode("utf-8")).hexdigest().upper()
     raise RuntimeError(f"Unsupported ROBOKASSA_SIGNATURE_ALG={ROBOKASSA_SIGNATURE_ALG}")
 
@@ -291,7 +277,6 @@ def sign_success(out_sum, inv_id: int) -> str:
     return sig
 
 def sign_result_from_raw(out_sum_raw: str, inv_id: int) -> str:
-    # OutSum берём СТРОКОЙ как пришёл (без форматирования!)
     base = f"{out_sum_raw}:{inv_id}:{_pwd2()}"
     sig = _hash_hex(base)
     logger.info("RK base(result)='%s' -> sig=%s", base.replace(_pwd2(), "***"), sig)
@@ -304,7 +289,7 @@ def build_pay_url(inv_id: int, out_sum, description: str = "Подписка н�
         "MerchantLogin":  ROBOKASSA_LOGIN,
         "OutSum":         money2(out_sum),
         "InvId":          str(inv_id),
-        "Description":    description,
+        "Description":    description,   # urlencode закодирует
         "SignatureValue": sign_success(out_sum, inv_id),
         "Culture":        "ru",
         "Encoding":       "utf-8",
@@ -363,7 +348,7 @@ def pay_kb(url: str) -> InlineKeyboardMarkup:
         inline_keyboard=[[InlineKeyboardButton(text=f"💳 Оплатить {money2(PRICE_RUB)} ₽ через Robokassa", url=url)]]
     )
 
-# ============== Документы и согласие ==============
+# =============== Документы и согласие ===============
 def legal_keyboard(token: str) -> InlineKeyboardMarkup:
     # одна кнопка подтверждения
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -371,7 +356,6 @@ def legal_keyboard(token: str) -> InlineKeyboardMarkup:
     ])
 
 def docs_keyboard(token: str) -> InlineKeyboardMarkup:
-    # отдельное меню ссылок (не обязательно открывать для оплаты)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📄 Политика конфиденциальности", url=f"{BASE_URL}/policy")],
         [InlineKeyboardButton(text="✅ Согласие на обработку данных", url=f"{BASE_URL}/consent")],
@@ -387,18 +371,62 @@ async def get_or_make_token(tg_id: int) -> str:
     await upsert_user(tg_id, policy_token=token, status="new", created_at=now_ts(), updated_at=now_ts())
     return token
 
-async def _legal_ok(tg_id: int) -> bool:
-    try:
-        async with db() as con:
-            async with con.cursor() as cur:
-                await cur.execute("SELECT legal_confirmed_at FROM users WHERE tg_id=%s", (tg_id,))
-                r = await cur.fetchone()
-        return bool(r and r.get("legal_confirmed_at"))
-    except Exception as e:
-        logger.error("_legal_ok failed: %s", e)
+def subscription_active(u: dict | None) -> bool:
+    if not u:
         return False
+    if u.get("status") != "active":
+        return False
+    vu = u.get("valid_until")
+    if not vu:
+        return True  # активна без срока — считаем активной
+    if isinstance(vu, str):
+        try:
+            vu = datetime.fromisoformat(vu)
+        except Exception:
+            return True
+    return vu >= now_ts()
 
-# ============== Bot handlers ==============
+# =============== Отправка инвайта (с фолбэком) ===============
+async def send_invite_to_user(tg_id: int):
+    """
+    Пытаемся создать персональный инвайт (member_limit=1, 2 дня).
+    Если не удалось/нет прав/не задан CHANNEL_ID — шлём CHANNEL_FALLBACK_INVITE (если задан).
+    """
+    if not bot:
+        raise RuntimeError("Bot is not initialized")
+    # вариант 1: создать персональную ссылку
+    if CHANNEL_ID:
+        try:
+            expire_at = now_ts() + timedelta(days=2)
+            link = await bot.create_chat_invite_link(
+                chat_id=CHANNEL_ID,
+                name=f"Sub {tg_id}",
+                expire_date=int(expire_at.timestamp()),
+                member_limit=1
+            )
+            await bot.send_message(tg_id, f"Ваша ссылка в закрытый канал:\n{link.invite_link}")
+            return
+        except Exception as e:
+            logger.error("create_chat_invite_link failed: %s", e)
+            if ADMIN_USER_ID:
+                try:
+                    await bot.send_message(ADMIN_USER_ID, f"Не удалось создать инвайт для {tg_id}: {e}")
+                except Exception:
+                    pass
+    # вариант 2: фолбэк-ссылка
+    if CHANNEL_FALLBACK_INVITE:
+        try:
+            await bot.send_message(
+                tg_id,
+                "Персональный инвайт временно недоступен. Используйте общую ссылку:\n" + CHANNEL_FALLBACK_INVITE
+            )
+            return
+        except Exception as e:
+            logger.error("fallback invite send failed: %s", e)
+    # если вообще ничего не удалось
+    raise RuntimeError("Cannot deliver invite link")
+
+# =============== Bot handlers ===============
 @dp.message(CommandStart())
 async def on_start(message: Message):
     token = await get_or_make_token(message.from_user.id)
@@ -421,6 +449,7 @@ async def on_help(message: Message):
         "/docs — ссылки на документы\n"
         "/pay — оплата (после согласия)\n"
         "/stats — статус подписки\n"
+        "/resend — прислать ссылку ещё раз\n"
         "/help — помощь"
     )
 
@@ -475,7 +504,9 @@ async def on_legal_agree(cb: CallbackQuery):
 @dp.message(Command("pay"))
 async def on_pay(message: Message):
     tg_id = message.from_user.id
-    if not await _legal_ok(tg_id):
+    # Нужно согласие
+    u = await get_user(tg_id)
+    if not u or not u.get("legal_confirmed_at"):
         token = await get_or_make_token(tg_id)
         await message.answer(
             "Сначала подтвердите ознакомление с документами:",
@@ -490,6 +521,21 @@ async def on_pay(message: Message):
     except Exception as e:
         logger.error("/pay failed: %s", e)
         await message.answer("⚠️ Временно недоступно. Попробуйте позже.")
+
+# NEW: ручная пересылка инвайта
+@dp.message(F.text == "🔁 Прислать ссылку")
+@dp.message(Command("resend"))
+async def on_resend(message: Message):
+    tg_id = message.from_user.id
+    u = await get_user(tg_id)
+    if not subscription_active(u):
+        await message.answer("Подписка не активна. Нажмите «💳 Оплатить подписку» и завершите оплату.")
+        return
+    try:
+        await send_invite_to_user(tg_id)
+    except Exception as e:
+        logger.error("resend failed: %s", e)
+        await message.answer("Не удалось отправить ссылку. Попробуйте чуть позже.")
 
 def bar(progress: float, width: int = 20) -> str:
     filled = int(round(progress * width))
@@ -511,7 +557,7 @@ async def on_stats(message: Message):
             await message.answer("Не удалось разобрать дату окончания.")
             return
 
-    now = datetime.now(timezone.utc)
+    now = now_ts()
     total = timedelta(days=SUBSCRIPTION_DAYS)
     left = max(vu - now, timedelta(0))
     used = total - left
@@ -530,7 +576,7 @@ async def on_stats(message: Message):
 async def on_text(message: Message):
     await message.answer("Напишите /help для списка команд.")
 
-# ============== Документные страницы (просто отдать HTML) ==============
+# =============== Документные страницы ===============
 def _read_html(path: str) -> HTMLResponse:
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -550,12 +596,12 @@ def consent_plain():
 def offer_plain():
     return _read_html("static/offer.html")
 
-# ============== Robokassa callbacks ==============
+# =============== Robokassa callbacks ===============
 @app.post("/pay/result")
 async def pay_result(request: Request):
     data = dict(await request.form())
     try:
-        out_sum_raw = (data.get("OutSum") or "").strip()   # строка как есть
+        out_sum_raw = (data.get("OutSum") or "").strip()
         inv_id = int(data.get("InvId"))
         sig = (data.get("SignatureValue") or "").strip()
     except Exception:
@@ -567,16 +613,15 @@ async def pay_result(request: Request):
         try:
             async with db() as con:
                 async with con.cursor() as cur:
-                    await cur.execute(
-                        "UPDATE payments SET status='failed' WHERE inv_id=%s AND status='created'",
-                        (inv_id,),
-                    )
+                    await cur.execute("UPDATE payments SET status='failed' WHERE inv_id=%s AND status='created'", (inv_id,))
                 await con.commit()
         except Exception:
             pass
         raise HTTPException(403, "Invalid signature")
 
     await set_payment_paid(inv_id)
+
+    # чья это оплата?
     async with db() as con:
         async with con.cursor() as cur:
             await cur.execute("SELECT tg_id FROM payments WHERE inv_id=%s", (inv_id,))
@@ -589,24 +634,17 @@ async def pay_result(request: Request):
     valid_until = now_ts() + timedelta(days=SUBSCRIPTION_DAYS)
     await upsert_user(tg_id, status="active", valid_until=valid_until, remind_3d_sent=0)
 
-    # Пытаемся выдать инвайт в канал
-    if bot and CHANNEL_ID:
-        try:
-            expire_at = now_ts() + timedelta(days=2)
-            link = await bot.create_chat_invite_link(
-                chat_id=CHANNEL_ID,
-                name=f"Sub {tg_id} {inv_id}",
-                expire_date=int(expire_at.timestamp()),
-                member_limit=1
-            )
-            await bot.send_message(tg_id, f"Оплата получена ✅\nВаша ссылка в закрытый канал:\n{link.invite_link}")
-        except Exception as e:
-            logger.error("create_chat_invite_link failed: %s", e)
-            if ADMIN_USER_ID and bot:
-                try:
-                    await bot.send_message(ADMIN_USER_ID, f"Не удалось создать инвайт: {e}")
-                except Exception:
-                    pass
+    # Отправляем инвайт (или фолбэк)
+    try:
+        await send_invite_to_user(tg_id)
+    except Exception as e:
+        logger.error("send_invite after payment failed: %s", e)
+        # не падаем: ответ Robokassa всё равно 200
+        if ADMIN_USER_ID and bot:
+            try:
+                await bot.send_message(ADMIN_USER_ID, f"Оплата {inv_id} получена, но ссылку не отправили: {e}")
+            except Exception:
+                pass
 
     return PlainTextResponse(f"OK{inv_id}")
 
@@ -618,7 +656,7 @@ def pay_success():
 def pay_fail():
     return HTMLResponse("<h2>Оплата не завершена. Вы можете повторить попытку в боте.</h2>")
 
-# ============== Webhook & lifecycle ==============
+# =============== Webhook & lifecycle ===============
 @app.post(f"/telegram/webhook/{WEBHOOK_SECRET}")
 async def telegram_webhook(request: Request):
     if not bot:
@@ -679,5 +717,3 @@ async def shutdown():
         except asyncio.CancelledError:
             pass
     loop_task = None
-
-# ===== End of file =====
