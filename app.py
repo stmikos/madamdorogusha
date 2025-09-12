@@ -59,7 +59,7 @@ ROBOKASSA_SIGNATURE_ALG = (_clean(os.getenv("ROBOKASSA_SIGNATURE_ALG")) or "SHA2
 ROBOKASSA_TEST_MODE = _clean(os.getenv("ROBOKASSA_TEST_MODE") or "0")  # "1" тест, "0" боевой
 
 # Цена/подписка
-PRICE_RUB = Decimal(_clean(os.getenv("PRICE_RUB") or "10")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+PRICE_RUB = Decimal(_clean(os.getenv("PRICE_RUB") or "289")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "3"))
 
 # БД (Supabase Pooler или полноценный URL)
